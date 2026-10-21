@@ -16,6 +16,9 @@ DerivedData
 *.hmap
 *.ipa
 *.xcuserstate
+.build/
+ModernSpectacle/dist/
 
 Carthage/Build
 Carthage/Checkouts
+.DS_Store

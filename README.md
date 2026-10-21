@@ -4,6 +4,25 @@
 
 Easily organize windows without using a mouse.
 
+## Modern Swift Rewrite
+
+The modern macOS rewrite lives in [`ModernSpectacle`](ModernSpectacle/README.md).
+
+For local use:
+
+```sh
+ModernSpectacle/build-app.sh
+open ModernSpectacle/dist/ModernSpectacle.app
+```
+
+The app runs from the menu bar and needs Accessibility permission in System Settings.
+
+To run the package directly during development:
+
+```sh
+swift run --package-path ModernSpectacle ModernSpectacle
+```
+
 ## Important Note
 
 **This project is not being actively maintained.** Unfortunately, after almost a decade of on-and-off development I can no longer dedicate the time needed to be a responsible maintainer of this project. Spectacle will remain available for download but please use at your own risk. The source code will continue to be free and open to anyone, so feel free to make Spectacle your own.
