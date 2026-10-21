@@ -47,6 +47,24 @@ public struct ManagedWindow: Equatable {
         return role != kAXSheetRole && subrole != kAXSystemDialogSubrole
     }
 
+    /// True for ordinary document/app windows: not panels, sheets, dialogs or popovers.
+    public var isStandardWindow: Bool {
+        stringValue(for: kAXRoleAttribute) == kAXWindowRole
+            && stringValue(for: kAXSubroleAttribute) == kAXStandardWindowSubrole
+    }
+
+    public var title: String {
+        stringValue(for: kAXTitleAttribute) ?? ""
+    }
+
+    public var isMinimized: Bool {
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &rawValue) == .success else {
+            return false
+        }
+        return (rawValue as? Bool) ?? false
+    }
+
     public func setFrame(_ frame: CGRect) {
         var origin = frame.origin
         var size = frame.size
@@ -113,5 +131,20 @@ public final class AccessibilityClient {
         }
 
         return ManagedWindow(element: windowElement as! AXUIElement)
+    }
+
+    /// All windows of one app, front to back. Apps that do not answer within `timeout` seconds are skipped.
+    public func windows(of pid: pid_t, timeout: Float = 0.25) -> [ManagedWindow] {
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, timeout)
+
+        var rawWindows: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &rawWindows) == .success,
+            let elements = rawWindows as? [AXUIElement]
+        else {
+            return []
+        }
+        return elements.map { ManagedWindow(element: $0) }
     }
 }

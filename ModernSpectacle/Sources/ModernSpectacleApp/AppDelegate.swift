@@ -1,17 +1,16 @@
 import AppKit
 import ModernSpectacleCore
-import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppModel()
     private var statusItem: NSStatusItem?
-    private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         installStatusItem()
         model.refreshPermissions()
+        model.onAPIKeyChange = { [weak self] in self?.rebuildMenu() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -53,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        addActionItems([.smartArrange], to: menu)
+        menu.addItem(.separator())
         addActionItems([.center, .maximize], to: menu)
         menu.addItem(.separator())
         addActionItems([.leftHalf, .rightHalf, .topHalf, .bottomHalf], to: menu)
@@ -84,13 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func addActionItems(_ actions: [WindowAction], to menu: NSMenu) {
         for action in actions {
-            let item = menuItem(action.title) { [weak self] in
+            let needsKey = action == .smartArrange && !model.hasAPIKey
+            let item = menuItem(needsKey ? "\(action.title) (needs API key)" : action.title) { [weak self] in
                 self?.model.perform(action)
             }
             item.keyEquivalent = action.keyEquivalent
             item.keyEquivalentModifierMask = action.keyEquivalentModifierMask
             item.toolTip = action.defaultShortcutDescription
-            item.isEnabled = model.shortcutsEnabled || action.isHistoryAction
+            item.isEnabled = (model.shortcutsEnabled || action.isHistoryAction) && !needsKey
             menu.addItem(item)
         }
     }
@@ -105,26 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showSettings() {
-        if settingsWindow == nil {
-            let contentView = SettingsView()
-                .environmentObject(model)
-                .frame(width: 520, height: 560)
-
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 520, height: 560),
-                styleMask: [.titled, .closable, .miniaturizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "Modern Spectacle Settings"
-            window.contentView = NSHostingView(rootView: contentView)
-            window.center()
-            window.isReleasedWhenClosed = false
-            settingsWindow = window
-        }
-
-        NSApp.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+        model.showSettings()
     }
 }
 
@@ -161,6 +144,8 @@ private extension WindowAction {
             "\u{F701}"
         case .undo, .redo:
             "z"
+        case .smartArrange:
+            "a"
         }
     }
 
@@ -172,7 +157,7 @@ private extension WindowAction {
             [.control, .command]
         case .lowerLeft, .lowerRight:
             [.control, .shift, .command]
-        case .nextDisplay, .previousDisplay:
+        case .nextDisplay, .previousDisplay, .smartArrange:
             [.control, .option, .command]
         case .nextThird, .previousThird:
             [.control, .option]

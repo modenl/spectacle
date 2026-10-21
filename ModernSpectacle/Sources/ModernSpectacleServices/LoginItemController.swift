@@ -2,9 +2,9 @@ import Foundation
 import ServiceManagement
 
 @MainActor
-public final class LoginItemController: ObservableObject {
-    @Published public private(set) var isEnabled: Bool
-    @Published public private(set) var lastError: String?
+public final class LoginItemController {
+    public private(set) var isEnabled: Bool
+    public private(set) var lastError: String?
 
     public init() {
         isEnabled = SMAppService.mainApp.status == .enabled

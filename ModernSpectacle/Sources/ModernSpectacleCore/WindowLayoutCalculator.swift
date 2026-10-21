@@ -57,7 +57,7 @@ public struct WindowLayoutCalculator: Sendable {
             return resized(currentWindow, in: targetFrame, scale: 1.10)
         case .smaller:
             return resized(currentWindow, in: targetFrame, scale: 0.90)
-        case .undo, .redo:
+        case .undo, .redo, .smartArrange:
             return nil
         }
     }

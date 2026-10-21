@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "ModernSpectacle", targets: ["ModernSpectacleApp"]),
+        .executable(name: "spectacle-cli", targets: ["ModernSpectacleCLI"]),
         .library(name: "ModernSpectacleCore", targets: ["ModernSpectacleCore"])
     ],
     targets: [
@@ -19,6 +20,13 @@ let package = Package(
         ),
         .executableTarget(
             name: "ModernSpectacleApp",
+            dependencies: [
+                "ModernSpectacleCore",
+                "ModernSpectacleServices"
+            ]
+        ),
+        .executableTarget(
+            name: "ModernSpectacleCLI",
             dependencies: [
                 "ModernSpectacleCore",
                 "ModernSpectacleServices"

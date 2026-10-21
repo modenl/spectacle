@@ -5,8 +5,11 @@ import ModernSpectacleCore
 public final class WindowController {
     private let accessibilityClient: AccessibilityClient
     private let calculator: WindowLayoutCalculator
-    private var undoStack: [(window: ManagedWindow, frame: CGRect)] = []
-    private var redoStack: [(window: ManagedWindow, frame: CGRect)] = []
+    public typealias FrameSnapshot = [(window: ManagedWindow, frame: CGRect)]
+
+    // Each entry is one undoable step; a smart arrangement restores several windows at once.
+    private var undoStack: [FrameSnapshot] = []
+    private var redoStack: [FrameSnapshot] = []
 
     public init(
         accessibilityClient: AccessibilityClient = AccessibilityClient(),
@@ -44,20 +47,28 @@ public final class WindowController {
             return
         }
 
-        undoStack.append((window, currentFrame))
-        redoStack.removeAll()
+        pushUndo([(window, currentFrame)])
         window.setFrame(targetFrame)
     }
 
-    private func restore(
-        from source: inout [(window: ManagedWindow, frame: CGRect)],
-        into destination: inout [(window: ManagedWindow, frame: CGRect)]
-    ) {
-        guard let item = source.popLast(), let currentFrame = item.window.frame else {
+    /// Records the frames to restore on the next undo. Call before changing them.
+    public func pushUndo(_ snapshot: FrameSnapshot) {
+        undoStack.append(snapshot)
+        redoStack.removeAll()
+    }
+
+    private func restore(from source: inout [FrameSnapshot], into destination: inout [FrameSnapshot]) {
+        guard let snapshot = source.popLast() else {
             return
         }
 
-        destination.append((item.window, currentFrame))
-        item.window.setFrame(item.frame)
+        let current = snapshot.compactMap { item -> (window: ManagedWindow, frame: CGRect)? in
+            guard let frame = item.window.frame else { return nil }
+            return (item.window, frame)
+        }
+        destination.append(current)
+        for item in snapshot {
+            item.window.setFrame(item.frame)
+        }
     }
 }
