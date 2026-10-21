@@ -39,6 +39,30 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         self.apiKeyProvider = apiKeyProvider
     }
 
+    public enum KeyCheck: Equatable, Sendable {
+        case valid
+        case invalid(String)
+        case unreachable(String)
+    }
+
+    /// Cheapest possible authenticated call: lists one model. Says whether the key works without spending tokens.
+    public static func check(apiKey: String) async -> KeyCheck {
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models?limit=1")!)
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 10
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 200 { return .valid }
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                .flatMap { $0["error"] as? [String: Any] }?["message"] as? String
+            return .invalid("HTTP \(status): \(message ?? "unexpected response")")
+        } catch {
+            return .unreachable(error.localizedDescription)
+        }
+    }
+
     public func plan(_ request: LayoutRequest) async throws -> LayoutPlan {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else {
             throw PlannerError.missingAPIKey

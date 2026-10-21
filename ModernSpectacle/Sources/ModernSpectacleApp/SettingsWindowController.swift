@@ -11,9 +11,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let loginToggle = NSButton(checkboxWithTitle: "Launch at Login", target: nil, action: nil)
     private let loginError = NSTextField(wrappingLabelWithString: "")
     private let keyStatus = NSTextField(labelWithString: "")
-    private let keyField = NSSecureTextField()
+    private let keyCheck = NSTextField(wrappingLabelWithString: "")
+    private let secureKeyField = NSSecureTextField()
+    private let plainKeyField = NSTextField()
+    private let showKeyToggle = NSButton(checkboxWithTitle: "Show", target: nil, action: nil)
     private let saveKeyButton = NSButton(title: "Save", target: nil, action: nil)
+    private let testKeyButton = NSButton(title: "Test", target: nil, action: nil)
     private let removeKeyButton = NSButton(title: "Remove", target: nil, action: nil)
+    private var keyDraft: String {
+        showKeyToggle.state == .on ? plainKeyField.stringValue : secureKeyField.stringValue
+    }
     private let arrangeStatus = NSTextField(wrappingLabelWithString: "")
 
     init(model: AppModel) {
@@ -49,8 +56,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         keyStatus.stringValue = model.hasAPIKey ? "Stored in Keychain" : "Not set"
         keyStatus.textColor = model.hasAPIKey ? .secondaryLabelColor : .systemRed
+        keyCheck.stringValue = model.apiKeyStatus
+        let ok = model.apiKeyStatus.hasPrefix("Valid")
+        keyCheck.textColor = ok ? .systemGreen : (model.hasAPIKey ? .systemRed : .secondaryLabelColor)
         removeKeyButton.isEnabled = model.hasAPIKey
-        saveKeyButton.isEnabled = !keyField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
+        testKeyButton.isEnabled = model.hasAPIKey
+        saveKeyButton.isEnabled = !keyDraft.trimmingCharacters(in: .whitespaces).isEmpty
 
         arrangeStatus.stringValue = model.arrangeStatus
     }
@@ -80,19 +91,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         stack.addArrangedSubview(header("Smart Arrange"))
         stack.addArrangedSubview(row("Claude API key (claude-haiku-5-5)", trailing: keyStatus))
-        keyField.placeholderString = "Paste key, then Save"
-        keyField.target = self
-        keyField.action = #selector(saveKey)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyFieldChanged), name: NSControl.textDidChangeNotification, object: keyField)
+        for field in [secureKeyField, plainKeyField] as [NSTextField] {
+            field.placeholderString = "Paste key (starts with sk-ant-), then Save"
+            field.target = self
+            field.action = #selector(saveKey)
+            // One scrolling line: a 100+ character key must not wrap and grow the window.
+            field.usesSingleLineMode = true
+            field.cell?.wraps = false
+            field.cell?.isScrollable = true
+            field.lineBreakMode = .byClipping
+            field.widthAnchor.constraint(equalToConstant: 340).isActive = true
+            NotificationCenter.default.addObserver(self, selector: #selector(keyFieldChanged), name: NSControl.textDidChangeNotification, object: field)
+        }
+        plainKeyField.isHidden = true
+        showKeyToggle.target = self
+        showKeyToggle.action = #selector(toggleShowKey)
         saveKeyButton.target = self
         saveKeyButton.action = #selector(saveKey)
+        testKeyButton.target = self
+        testKeyButton.action = #selector(testKey)
         removeKeyButton.target = self
         removeKeyButton.action = #selector(removeKey)
-        let keyRow = NSStackView(views: [keyField, saveKeyButton, removeKeyButton])
+        let keyRow = NSStackView(views: [secureKeyField, plainKeyField, showKeyToggle, saveKeyButton])
         keyRow.orientation = .horizontal
-        keyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
         stack.addArrangedSubview(keyRow)
-        let hint = NSTextField(wrappingLabelWithString: "Without a key the built-in heuristic is used. Plans are pre-computed when the window set changes, so ⌃⌥⌘A applies instantly.")
+        let keyButtons = NSStackView(views: [testKeyButton, removeKeyButton])
+        keyButtons.orientation = .horizontal
+        stack.addArrangedSubview(keyButtons)
+        keyCheck.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        keyCheck.preferredMaxLayoutWidth = 460
+        stack.addArrangedSubview(keyCheck)
+        let hint = NSTextField(wrappingLabelWithString: "Smart Arrange and the tiling suggestions need a key; the manual shortcuts work without one. Plans are pre-computed when the window set changes, so ⌃⌥⌘A applies instantly.")
         hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         hint.textColor = .secondaryLabelColor
         stack.addArrangedSubview(hint)
@@ -146,14 +175,32 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func keyFieldChanged() {
-        saveKeyButton.isEnabled = !keyField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
+        saveKeyButton.isEnabled = !keyDraft.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    @objc private func toggleShowKey() {
+        let showing = showKeyToggle.state == .on
+        if showing {
+            plainKeyField.stringValue = secureKeyField.stringValue
+        } else {
+            secureKeyField.stringValue = plainKeyField.stringValue
+        }
+        plainKeyField.isHidden = !showing
+        secureKeyField.isHidden = showing
+        window?.makeFirstResponder(showing ? plainKeyField : secureKeyField)
     }
 
     @objc private func saveKey() {
-        let key = keyField.stringValue
+        let key = keyDraft
         guard !key.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         model.saveAPIKey(key)
-        keyField.stringValue = ""
+        secureKeyField.stringValue = ""
+        plainKeyField.stringValue = ""
+        refresh()
+    }
+
+    @objc private func testKey() {
+        model.checkAPIKey()
         refresh()
     }
 
