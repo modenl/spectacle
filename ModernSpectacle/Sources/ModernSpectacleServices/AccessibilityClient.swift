@@ -210,9 +210,11 @@ public final class AccessibilityClient {
         windowsWithStatus(of: pid, timeout: timeout).windows
     }
 
-    /// Windows plus a short note on how they were found, for the debug dump. Electron and Chromium apps (Claude,
-    /// Codex, Slack…) build their accessibility tree only after an assistive app asks for it with AXManualAccessibility;
-    /// until then they answer with no windows. When an app has windows on screen but reports none, ask and retry.
+    /// Windows plus a short note on how they were found, for the log. Electron and Chromium apps (Claude, Codex,
+    /// Slack…) build their accessibility tree only after an assistive app asks for it with AXManualAccessibility, build
+    /// it asynchronously, and may drop it again when idle; until then they answer with no windows. When an app has
+    /// windows on screen but reports none, switch the attribute off and on (setting it while it is already on does
+    /// nothing) and give the app up to 0.6 s to answer. Missing the frontmost window would leave it covering the layout.
     public func windowsWithStatus(of pid: pid_t, timeout: Float = 0.25) -> (windows: [ManagedWindow], note: String) {
         let appElement = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(appElement, timeout)
@@ -222,10 +224,17 @@ public final class AccessibilityClient {
         }
         // AXManualAccessibility only: AXEnhancedUserInterface would also expose the windows, but makes the app animate
         // frame changes and drop the ones that overlap.
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanFalse)
         AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         AXUIElementSetMessagingTimeout(appElement, 1.0)
-        let (second, retryError) = copyWindows(appElement)
-        return (second, "retried after enabling accessibility (first: ax \(error.rawValue), retry: ax \(retryError.rawValue))")
+        var (second, retryError) = copyWindows(appElement)
+        var waited = 0
+        while second.isEmpty, waited < 600 {
+            usleep(100_000)
+            waited += 100
+            (second, retryError) = copyWindows(appElement)
+        }
+        return (second, "retried after enabling accessibility for \(waited) ms (first: ax \(error.rawValue), retry: ax \(retryError.rawValue))")
     }
 
     private func copyWindows(_ appElement: AXUIElement) -> ([ManagedWindow], AXError) {

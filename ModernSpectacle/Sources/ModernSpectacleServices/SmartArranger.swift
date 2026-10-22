@@ -165,6 +165,7 @@ public final class SmartArranger {
         }
         let started = Date()
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: started)
+        for app in snapshot.apps where app.contains("retried") { Self.log(app) } // app names and error codes only
         let request = makeRequest(from: snapshot, now: started)
         guard !request.windows.isEmpty else {
             update(L("No windows to arrange", "没有可排列的窗口"), planner: nil)
