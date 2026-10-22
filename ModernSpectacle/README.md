@@ -50,7 +50,7 @@ Then grant Accessibility permission in System Settings.
 
 ## Distribution Notes
 
-`build-app.sh` signs with a Developer ID Application certificate when one is in the keychain (hardened runtime, secure timestamp), otherwise with the Apple Development certificate for local use. Publish only Developer ID builds, notarized and stapled. The app stays outside the App Sandbox: Apple's developer support confirms that sandboxed apps cannot use the Accessibility APIs, which is why there is no Mac App Store version.
+`build-app.sh` signs with a Developer ID Application certificate when one is in the keychain (hardened runtime, secure timestamp), otherwise with the Apple Development certificate for local use. Publish only Developer ID builds, notarized and stapled: `./release.sh` does all of it and prints the dmg to upload (it needs that certificate and a notarytool keychain profile, created once with `xcrun notarytool store-credentials modernspectacle`). The app stays outside the App Sandbox: Apple's developer support confirms that sandboxed apps cannot use the Accessibility APIs, which is why there is no Mac App Store version.
 
 `DEV_HOOKS=1 ./build-app.sh` keeps the `spectacle-cli trigger` hooks and writes `last-arrangement.json` for debugging. Never publish such a build: any local process could then move windows with the app's Accessibility permission.
 
