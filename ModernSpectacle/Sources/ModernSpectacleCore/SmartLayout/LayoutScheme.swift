@@ -77,7 +77,7 @@ public struct ResolvedScheme: Sendable {
     public var readability: [AppKind: CGFloat]
 
     public func displayClass(width: CGFloat, height: CGFloat) -> (displayClass: LayoutScheme.DisplayClass, templates: [LayoutTemplate]) {
-        classes.first { $0.displayClass.matches(width: Double(width), height: Double(height)) } ?? classes[classes.count - 1]
+        classes.first { $0.displayClass.matches(width: Double(width), height: Double(height)) } ?? classes.last ?? SchemeLoader.builtIn.classes.last!
     }
 
     public var allTemplates: [LayoutTemplate] { classes.flatMap(\.templates) }
@@ -143,8 +143,8 @@ public enum SchemeLoader {
         let asked: [(AppKind, Double?, CGFloat)] = [(.browser, scheme.readability?.browser, 640), (.coding, scheme.readability?.coding, 520), (.other, scheme.readability?.other, 300)]
         for (kind, value, standard) in asked {
             let floor = readabilityFloor[kind]!
-            let wanted = value.map { CGFloat($0) } ?? standard
-            if wanted < floor { problems.append("readability \(kind.rawValue): \(Int(wanted)) is below the floor \(Int(floor))") }
+            let wanted = value.flatMap { $0.isFinite ? CGFloat($0) : nil } ?? standard
+            if wanted < floor { problems.append("readability \(kind.rawValue): below the floor \(Int(floor))") }
             readability[kind] = min(max(wanted, floor), 1200)
         }
         return (ResolvedScheme(serial: scheme.serial, version: scheme.version, classes: classes, readability: readability), problems)
@@ -184,8 +184,8 @@ public enum SchemeLoader {
 
     /// "name", "name!" (awareness), "name:0.4" (height share), "name!:0.4".
     static func parseSlot(_ text: String) -> TemplateSlot? {
-        let parts = text.split(separator: ":", maxSplits: 1).map(String.init)
-        var name = parts[0]
+        let parts = text.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+        guard var name = parts.first else { return nil }
         let awareness = name.hasSuffix("!")
         if awareness { name.removeLast() }
         guard isValidID(name, maxLength: 24) else { return nil }
@@ -197,7 +197,7 @@ public enum SchemeLoader {
         return TemplateSlot(name, share: share, awareness: awareness)
     }
 
-    /// The layouts the app ships with, used until a newer signed scheme arrives and whenever one is unusable.
+    /// The layouts the app ships with.
     public static let builtIn: ResolvedScheme = {
         let scheme = try! decode(Data(builtInJSON.utf8))
         let (resolved, problems) = resolve(scheme)

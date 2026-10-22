@@ -89,3 +89,44 @@ struct LayoutSchemeTests {
         #expect(frames[2].slot.awareness)
     }
 }
+
+@Suite
+struct HardeningTests {
+    @Test
+    func updateLinksStayOnTheStore() {
+        let page = UpdatePolicy.storePageURL
+        let download = URL(string: "https://store.alvumo.xyz/download/modern-spectacle/1.0/x.dmg")!
+        #expect(UpdatePolicy.openable(download) == download)
+        for bad in ["file:///System/Applications/Calculator.app", "http://store.alvumo.xyz/app/x", "https://evil.example/app",
+                    "https://user:pw@store.alvumo.xyz/x", "https://store.alvumo.xyz:8443/x", "slack://open"] {
+            #expect(UpdatePolicy.openable(URL(string: bad)!) == page)
+        }
+    }
+
+    @Test
+    func malformedSlotsAndFloorsDoNotCrash() {
+        #expect(SchemeLoader.parseSlot("") == nil)
+        #expect(SchemeLoader.parseSlot(":0.5") == nil)
+        let json = """
+        {"serial": 2, "version": "x", "displayClasses": [{"id": "wide"}], "readability": {"browser": -1e100},
+         "templates": {"wide": [{"id": "a", "title": {"en": "A"}, "columns": [[1, "main"]]}]}}
+        """
+        let (scheme, problems) = SchemeLoader.resolve(try! SchemeLoader.decode(Data(json.utf8)))
+        #expect(scheme.readability[.browser] == SchemeLoader.readabilityFloor[.browser])
+        #expect(!problems.isEmpty)
+    }
+
+    @Test
+    func damagedHistoryIsKeptAside() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = folder.appendingPathComponent("layout-history.json")
+        try LocalFiles.write(Data("{ not json".utf8), to: url)
+        #expect(LayoutHistory.load(from: url).arrangements.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let damaged = folder.appendingPathComponent("layout-history.damaged.json")
+        #expect(try String(contentsOf: damaged, encoding: .utf8) == "{ not json")
+        let mode = try FileManager.default.attributesOfItem(atPath: damaged.path)[.posixPermissions] as? Int
+        #expect(mode == 0o600)
+        try? FileManager.default.removeItem(at: folder)
+    }
+}

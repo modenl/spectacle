@@ -10,6 +10,7 @@ import ModernSpectacleServices
 //                                     first template, print both
 //   spectacle-cli plan --sample …     the same for a built-in sample desktop (no Accessibility needed)
 //   spectacle-cli arrange …           rank, fill and apply
+//   (trigger needs an app built with DEV_HOOKS=1 ./build-app.sh, or a debug build)
 //   spectacle-cli trigger             ask the running app to Smart Arrange (same as pressing the Smart Arrange shortcut)
 //   spectacle-cli trigger <command> [argument]
 //                                     ask the running app to run a WindowAction by name (leftHalf, promoteFocused…),

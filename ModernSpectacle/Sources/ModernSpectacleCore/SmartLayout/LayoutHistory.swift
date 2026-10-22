@@ -79,20 +79,26 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
         }
     }
 
+    /// A file that cannot be read as history (edited by hand, cut short, far too large) is moved aside to
+    /// `<name>.damaged.json` rather than overwritten by the next save, so saved layouts can still be recovered from it.
     public static func load(from url: URL) -> LayoutHistory {
-        guard let data = try? Data(contentsOf: url) else {
-            return LayoutHistory()
-        }
+        guard FileManager.default.fileExists(atPath: url.path) else { return LayoutHistory() }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(LayoutHistory.self, from: data)) ?? LayoutHistory()
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 10_000_000,
+           let data = try? Data(contentsOf: url), let history = try? decoder.decode(LayoutHistory.self, from: data) {
+            return history
+        }
+        let damaged = url.deletingPathExtension().appendingPathExtension("damaged.json")
+        try? FileManager.default.removeItem(at: damaged)
+        try? FileManager.default.moveItem(at: url, to: damaged)
+        return LayoutHistory()
     }
 
     public func save(to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try encoder.encode(self).write(to: url, options: .atomic)
+        try LocalFiles.write(encoder.encode(self), to: url)
     }
 }

@@ -22,6 +22,11 @@ done
 if [[ "${DISTRIBUTION}" == "appstore" ]]; then
   ARCH_FLAGS+=(-Xswiftc -DAPP_STORE)
 fi
+# DEV_HOOKS=1 keeps the `spectacle-cli trigger` hooks and the last-arrangement.json dump, for testing on this Mac.
+# Never publish such a build: any local process could then move windows with this app's Accessibility permission.
+if [[ "${DEV_HOOKS:-}" == "1" ]]; then
+  ARCH_FLAGS+=(-Xswiftc -DDEV_HOOKS)
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_DIR="${SCRIPT_DIR}/dist"
@@ -159,13 +164,14 @@ if [[ -z "${SIGN_IDENTITY}" ]]; then
     | head -n 1)"
 fi
 
-if [[ "${SIGN_IDENTITY}" == "Developer ID Application:"* ]]; then
-  # Distribution build: hardened runtime and secure timestamp are required for notarization.
-  codesign --force --options runtime --timestamp \
+if [[ -n "${SIGN_IDENTITY}" ]]; then
+  # Hardened runtime always; a secure timestamp too unless signing for development (notarization needs both).
+  TIMESTAMP=(--timestamp)
+  [[ "${SIGN_IDENTITY}" == "Apple Development:"* ]] && TIMESTAMP=()
+  codesign --force --options runtime ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} \
     --entitlements "${SCRIPT_DIR}/Resources/ModernSpectacle.entitlements" \
     --sign "${SIGN_IDENTITY}" "${APP_DIR}" >/dev/null
-elif [[ -n "${SIGN_IDENTITY}" ]]; then
-  codesign --force --sign "${SIGN_IDENTITY}" "${APP_DIR}" >/dev/null
+  codesign --verify --strict "${APP_DIR}"
 else
   codesign --force --sign - "${APP_DIR}" >/dev/null
   echo "warning: no Apple Development signing identity found; used ad-hoc signing." >&2

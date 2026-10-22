@@ -53,7 +53,9 @@ Then grant Accessibility permission in System Settings.
 `build-app.sh` builds two versions:
 
 - Direct download (default): signed with Developer ID when that certificate is present, hardened runtime, notarized before publishing. Outside the App Sandbox; checks the store once a day for updates.
-- Mac App Store (`DISTRIBUTION=appstore ./build-app.sh`, output in `dist/appstore`): App Sandbox on, no network entitlement, compiled with `APP_STORE`, which leaves out the update check, the store link and the `spectacle-cli trigger` hooks. Accessibility works inside the sandbox once the user grants it. With an Apple Distribution certificate, a Mac Installer Distribution certificate and `MAS_PROFILE=<provisioning profile>` it signs the app and writes `dist/appstore/ModernSpectacle-<version>.pkg` for Transporter; without them it signs the sandboxed app for local testing.
+- Mac App Store (`DISTRIBUTION=appstore ./build-app.sh`, output in `dist/appstore`): App Sandbox on, no network entitlement, compiled with `APP_STORE`, which leaves out the update check, the store link and the `spectacle-cli trigger` hooks. Apple's developer support says sandboxed apps cannot use the Accessibility APIs, so this build may not be able to move windows at all; test it on a clean Mac before submitting. With an Apple Distribution certificate, a Mac Installer Distribution certificate and `MAS_PROFILE=<provisioning profile>` it signs the app and writes `dist/appstore/ModernSpectacle-<version>.pkg` for Transporter; without them it signs the sandboxed app for local testing.
+
+`DEV_HOOKS=1 ./build-app.sh` keeps the `spectacle-cli trigger` hooks and writes `last-arrangement.json` for debugging. Never publish such a build: any local process could then move windows with the app's Accessibility permission.
 
 Each upload to App Store Connect needs a higher build number: `BUILD_NUMBER=5 DISTRIBUTION=appstore ARCHS="arm64 x86_64" ./build-app.sh`.
 

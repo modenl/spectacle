@@ -51,7 +51,7 @@ public final class UpdateChecker {
         let url = UpdatePolicy.latestURL(current: current, arch: nil)
         do {
             let (data, response) = try await session.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 100_000 else {
                 return .failed(L("The store did not answer", "商店没有响应"))
             }
             let release = try JSONDecoder().decode(StoreRelease.self, from: data)

@@ -59,9 +59,9 @@ final class AppModel {
             Task { @MainActor in self?.refreshPermissions() }
         }
         // A developer hook: `spectacle-cli trigger` posts this so arranging can be exercised without the hotkey.
-        // The token must be kept, or the observer silently goes away. Any local process can post these, so the App
-        // Store build leaves them out (its sandbox would not deliver the arguments anyway).
-        #if !APP_STORE
+        // The token must be kept, or the observer silently goes away. Any local process can post these and borrow
+        // this app's Accessibility permission, so they exist only in debug builds and in `DEV_HOOKS=1 ./build-app.sh`.
+        #if DEBUG || DEV_HOOKS
         triggerObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("xyz.alvumo.ModernSpectacle.arrange"), object: nil, queue: .main
         ) { [weak self] note in
@@ -88,7 +88,7 @@ final class AppModel {
     private func runCommand(_ command: String, argument: String) {
         SmartArranger.log("command \(command) \(argument)")
         switch command {
-        case "restore": restorePreset(at: (Int(argument) ?? 1) - 1)
+        case "restore": if let number = Int(argument), (1...9).contains(number) { restorePreset(at: number - 1) }
         case "save": if requireAccessibility() { smartArranger.savePreset(named: argument) }
         case "delete": smartArranger.deletePreset(named: argument)
         case "check-updates": checkForUpdatesNow()
@@ -258,7 +258,7 @@ final class AppModel {
             alternateTitle: L("Skip This Version", "跳过此版本"),
             near: mainDisplayFrame,
             timeout: 60,
-            onAccept: { NSWorkspace.shared.open(release.download?.url ?? release.url) },
+            onAccept: { NSWorkspace.shared.open(UpdatePolicy.openable(release.download?.url ?? release.url)) },
             onAlternate: { [weak self] in self?.updates.skip(release.version) }
         )
     }

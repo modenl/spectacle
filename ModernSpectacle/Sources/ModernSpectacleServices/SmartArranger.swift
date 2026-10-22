@@ -688,8 +688,7 @@ public final class SmartArranger {
         }
     }
 
-    /// Everything about the last arrangement, for debugging and the Profile window: what was seen, how the windows
-    /// were ranked, what was applied.
+    /// Everything about the last arrangement, for debugging: what was seen, how the windows were ranked, what was applied.
     private func dumpLastArrangement(request: LayoutRequest, ranking: WindowRanking, final: LayoutPlan, rejected: [String], apps: [String]) {
         struct Dump: Codable {
             var request: LayoutRequest
@@ -698,25 +697,22 @@ public final class SmartArranger {
             var rejectedWindows: [String]
             var apps: [String]
         }
+        // Window titles and the focus history: written only by developer builds.
+        #if DEBUG || DEV_HOOKS
         let dump = Dump(request: request, ranking: ranking, appliedPlan: final, rejectedWindows: rejected, apps: apps)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let url = historyURL.deletingLastPathComponent().appendingPathComponent("last-arrangement.json")
-        try? encoder.encode(dump).write(to: url, options: .atomic)
+        try? LocalFiles.write(encoder.encode(dump), to: url)
+        #endif
     }
 
     /// Appends one line to status.log next to the history file; `log show` does not reliably surface NSLog for this app.
     public static func log(_ message: String) {
         let url = defaultHistoryURL.deletingLastPathComponent().appendingPathComponent("status.log")
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            handle.write(Data(line.utf8))
-            try? handle.close()
-        } else {
-            try? Data(line.utf8).write(to: url)
-        }
+        LocalFiles.append(Data(line.utf8), to: url)
     }
 
     /// Forget the cached ranking so the next arrangement asks the model again.
@@ -896,11 +892,17 @@ public final class SmartArranger {
 
     /// Forgets what was learned; saved presets are the user's own and stay.
     public func resetLearning() {
+        activitySaveTask?.cancel()
         var fresh = LayoutHistory()
         fresh.presets = history.presets
         history = fresh
+        focusTimeline = []
+        windowFocus = [:]
+        lastActive = [:]
         cachedRanking = nil
+        lastRequest = nil
         saveHistory()
+        try? FileManager.default.removeItem(at: historyURL.deletingLastPathComponent().appendingPathComponent("last-arrangement.json"))
     }
 
     // MARK: - Helpers

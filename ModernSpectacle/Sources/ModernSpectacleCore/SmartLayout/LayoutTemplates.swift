@@ -116,19 +116,11 @@ public struct TemplatePlan: Codable, Equatable, Sendable {
 public enum LayoutTemplates {
     // MARK: Catalog
 
-    // Which templates each display gets comes from the active scheme (LayoutScheme): the built-in one, or a newer
-    // signed one from the server. Three per display size, cycled by pressing M again while ⌃⌥⌘ are held. None has a
+    // Which templates each display gets comes from the scheme (LayoutScheme, built in). Three per display size, cycled by pressing M again while ⌃⌥⌘ are held. None has a
     // stack strip: windows that get no slot wait fully hidden behind the tiles; a column of awareness slots keeps chat,
     // mail and monitors in view instead.
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var active: ResolvedScheme = SchemeLoader.builtIn
-
-    /// The scheme in use. Set at launch from the cached signed scheme and whenever a newer one arrives.
-    public static var scheme: ResolvedScheme {
-        get { lock.withLock { active } }
-        set { lock.withLock { active = newValue } }
-    }
+    public static let scheme = SchemeLoader.builtIn
 
     private static func templates(ofClass id: String) -> [LayoutTemplate] {
         scheme.classes.first { $0.displayClass.id == id }?.templates ?? []

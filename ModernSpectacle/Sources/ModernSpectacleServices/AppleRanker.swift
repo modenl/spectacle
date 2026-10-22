@@ -34,7 +34,7 @@ public final class AppleRanker: WindowRanker, Sendable {
         guard #available(macOS 26.0, *), Self.status == .available else { throw Unavailable() }
         let session = LanguageModelSession(instructions: RankingPrompt.instructions)
         let response = try await session.respond(to: try RankingState(request).json(), generating: AppleAnswer.self,
-                                                 options: GenerationOptions(sampling: .greedy))
+                                                 options: GenerationOptions(samplingMode: .greedy))
         return RankingPrompt.ranking(task: response.content.task, awareness: response.content.awareness, request: request, source: name)
     }
 }

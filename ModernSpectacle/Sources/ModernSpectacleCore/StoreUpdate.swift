@@ -30,6 +30,14 @@ public enum UpdatePolicy {
     /// The app's page in the store: what to send people, and where updates come from.
     public static let storePageURL = URL(string: "https://store.alvumo.xyz/app/\(storeAppID)")!
 
+    /// A link from the store's answer, if it is an https page on the store itself; otherwise the app's store page. The
+    /// answer comes from the network, so it never gets to open a local file, another app's URL scheme or another site.
+    public static func openable(_ url: URL) -> URL {
+        let host = storePageURL.host
+        guard url.scheme == "https", url.host == host, url.port == nil, url.user == nil, url.password == nil else { return storePageURL }
+        return url
+    }
+
     /// Numeric parts compared one by one, so 1.10 is newer than 1.9 and 1.2 equals 1.2.0.
     public static func isNewer(_ candidate: String, than current: String) -> Bool {
         let a = parts(candidate)
