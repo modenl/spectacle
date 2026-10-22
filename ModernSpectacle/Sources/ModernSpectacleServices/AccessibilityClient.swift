@@ -22,7 +22,9 @@ public enum AccessibilityPermission {
     }
 }
 
-public struct ManagedWindow: Equatable {
+/// Sendable: an AXUIElement is an immutable reference to another app's element, and Accessibility calls for different
+/// apps may run concurrently (arranging moves each app's windows in parallel).
+public struct ManagedWindow: Equatable, @unchecked Sendable {
     private let element: AXUIElement
 
     public init(element: AXUIElement) {
@@ -108,10 +110,15 @@ public struct ManagedWindow: Equatable {
             return
         }
 
-        // Some apps clamp size during movement, so size is applied before and after position.
-        AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
-        AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, position)
-        AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
+        // Two calls, in the order that never pushes the window past a screen edge mid-way (macOS would clamp it):
+        // shrinking resizes first, growing moves first. A size an app drops is set again by the post-arrange check.
+        if let current = self.frame, frame.width <= current.width, frame.height <= current.height {
+            AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
+            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, position)
+        } else {
+            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, position)
+            AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
+        }
     }
 
     /// Brings this window in front of its app's other windows; the app itself still has to be activated.

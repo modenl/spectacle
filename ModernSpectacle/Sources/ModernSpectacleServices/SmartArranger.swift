@@ -287,18 +287,15 @@ public final class SmartArranger {
     /// Applies the previewed arrangement: waits for the model if it is still ranking, moves the windows under the
     /// preview, and remembers the template chosen.
     private func commitPreview() async {
-        guard var current = session else { return }
+        // What the preview shows is what gets applied, at once: a model answer still on its way only fills the cache
+        // for next time.
+        guard let current = session else { return }
         stopWatchingEscape()
-        if let pending = current.pendingRanking {
-            onBusyChange?(true, L("Ranking windows…", "正在判断窗口…"))
-            current.ranking = await pending.value
-            guard session?.id == current.id else { return }
-        }
         session = nil
         let (choices, safe) = plan(of: current)
         let request = current.request
-        preview.commit { [weak self] in
-            self?.apply(safe, to: current.snapshot)
+        preview.commit { [weak self] done in
+            self?.apply(safe, to: current.snapshot, whenVisible: done)
         }
         dumpLastArrangement(request: request, ranking: current.ranking, final: safe, rejected: current.snapshot.rejected, apps: current.snapshot.apps)
         if let notes = current.ranking.notes, !notes.isEmpty {
@@ -402,26 +399,70 @@ public final class SmartArranger {
         return LocalRanker.rank(request)
     }
 
-    private func apply(_ plan: LayoutPlan, to snapshot: WindowEnumerator.Snapshot, frontID: Int? = nil) {
+    /// One window to move, carried into the parallel move tasks.
+    private struct MoveJob: Sendable {
+        var window: ManagedWindow
+        var pid: pid_t
+        var target: CGRect
+        var app: String
+        var bundleID: String
+    }
+
+    private struct Moved: Sendable {
+        var job: MoveJob
+        var before: CGRect
+        var after: CGRect?
+    }
+
+    /// Moves the windows: each app's windows in parallel with the other apps' (Accessibility calls are per app, and one
+    /// slow app such as a terminal snapping to its character grid must not hold up the rest). Visible windows first;
+    /// `whenVisible` runs as soon as they are in place, then the hidden background windows follow.
+    private func apply(_ plan: LayoutPlan, to snapshot: WindowEnumerator.Snapshot, frontID: Int? = nil, whenVisible: (@MainActor () -> Void)? = nil) {
         let entriesByID = Dictionary(snapshot.entries.map { ($0.info.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var undo: [(window: ManagedWindow, frame: CGRect)] = []
-        suppressObservationUntil = Date().addingTimeInterval(2)
-
-        for placement in plan.placements {
-            guard let entry = entriesByID[placement.id], let current = entry.window.frame else { continue }
-            if current.integral == placement.rect.integral { continue }
-            undo.append((entry.window, current))
-            entry.window.setFrame(placement.rect)
-            keepInsideDisplay(entry.window, planned: placement.rect, displays: snapshot.displays)
-            learnMinimumWidth(of: entry, planned: placement.rect)
+        suppressObservationUntil = Date().addingTimeInterval(3)
+        let jobs = plan.placements.compactMap { placement -> (job: MoveJob, hidden: Bool)? in
+            guard let entry = entriesByID[placement.id] else { return nil }
+            return (MoveJob(window: entry.window, pid: entry.pid, target: placement.rect, app: entry.info.app, bundleID: entry.info.bundleID), placement.group == "behind")
         }
-
-        if !undo.isEmpty {
-            windowController.pushUndo(undo)
+        let displayFrames = snapshot.displays.map(\.visibleFrame)
+        Task { @MainActor [weak self] in
+            let started = Date()
+            let visible = await Self.moveInParallel(jobs.filter { !$0.hidden }.map(\.job), displays: displayFrames)
+            let visibleMs = Int(Date().timeIntervalSince(started) * 1000)
+            whenVisible?()
+            let hidden = await Self.moveInParallel(jobs.filter(\.hidden).map(\.job), displays: displayFrames)
+            guard let self else { return }
+            let moved = visible + hidden
+            if !moved.isEmpty {
+                windowController.pushUndo(moved.map { ($0.job.window, $0.before) })
+            }
+            for item in moved { learnMinimumWidth(bundleID: item.job.bundleID, app: item.job.app, planned: item.job.target, actual: item.after) }
+            Self.log("apply: moved \(moved.count) of \(plan.placements.count), visible in \(visibleMs) ms, all in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            suppressObservationUntil = Date().addingTimeInterval(2)
+            settle(plan, entriesByID: entriesByID, displays: snapshot.displays)
+            let front = frontID ?? snapshot.windows.first { $0.isFocused }?.id
+            restack(plan, entriesByID: entriesByID, frontID: front)
         }
-        settle(plan, entriesByID: entriesByID, displays: snapshot.displays)
-        let front = frontID ?? snapshot.windows.first { $0.isFocused }?.id
-        restack(plan, entriesByID: entriesByID, frontID: front)
+    }
+
+    /// Each app's jobs run in order on their own task; the apps run side by side.
+    private nonisolated static func moveInParallel(_ jobs: [MoveJob], displays: [CGRect]) async -> [Moved] {
+        let byApp = Dictionary(grouping: jobs, by: \.pid)
+        return await withTaskGroup(of: [Moved].self) { group in
+            for appJobs in byApp.values {
+                group.addTask { appJobs.compactMap { move($0, displays: displays) } }
+            }
+            var all: [Moved] = []
+            for await moved in group { all += moved }
+            return all
+        }
+    }
+
+    private nonisolated static func move(_ job: MoveJob, displays: [CGRect]) -> Moved? {
+        guard let before = job.window.frame, before.integral != job.target.integral else { return nil }
+        job.window.setFrame(job.target)
+        keepInsideDisplay(job.window, planned: job.target, displays: displays)
+        return Moved(job: job, before: before, after: job.window.frame)
     }
 
     /// Some apps resize asynchronously (Sublime Text) and drop a size change that arrives while the previous one is
@@ -436,7 +477,7 @@ public final class SmartArranger {
                 for placement in plan.placements {
                     guard let entry = entriesByID[placement.id], let actual = entry.window.frame else { continue }
                     let window = entry.window
-                    learnMinimumWidth(of: entry, planned: placement.rect)
+                    learnMinimumWidth(bundleID: entry.info.bundleID, app: entry.info.app, planned: placement.rect, actual: actual)
                     // A window bigger than planned is at its app's minimum: aim for its own size, kept inside the display.
                     var target = placement.rect
                     if actual.width > target.width + 2 || actual.height > target.height + 2,
@@ -460,20 +501,20 @@ public final class SmartArranger {
 
     /// Remembers how narrow an app's windows can get when one would not shrink to its slot, so the next arrangement
     /// does not put it where it would overlap its neighbour.
-    private func learnMinimumWidth(of entry: WindowEnumerator.Entry, planned: CGRect) {
-        guard let actual = entry.window.frame, actual.width > planned.width + 2 else { return }
+    private func learnMinimumWidth(bundleID: String, app: String, planned: CGRect, actual: CGRect?) {
+        guard let actual, actual.width > planned.width + 2 else { return }
         let width = Int(actual.width.rounded())
-        guard width > history.minimumWidths[entry.info.bundleID] ?? 0 else { return }
-        history.minimumWidths[entry.info.bundleID] = width
+        guard width > history.minimumWidths[bundleID] ?? 0 else { return }
+        history.minimumWidths[bundleID] = width
         saveHistory()
-        Self.log("learned: \(entry.info.app) is at least \(width) wide")
+        Self.log("learned: \(app) is at least \(width) wide")
     }
 
     /// Some apps will not get narrower (or shorter) than their own minimum (Notes, Activity Monitor). Placed at the
     /// planned origin they would stick out past the display edge, so move such a window back inside.
-    private func keepInsideDisplay(_ window: ManagedWindow, planned: CGRect, displays: [DisplayInfo]) {
+    private nonisolated static func keepInsideDisplay(_ window: ManagedWindow, planned: CGRect, displays: [CGRect]) {
         guard let actual = window.frame, actual.width > planned.width + 2 || actual.height > planned.height + 2,
-              let display = displays.first(where: { $0.visibleFrame.contains(CGPoint(x: planned.midX, y: planned.midY)) })?.visibleFrame
+              let display = displays.first(where: { $0.contains(CGPoint(x: planned.midX, y: planned.midY)) })
         else { return }
         var fixed = actual
         if fixed.maxX > display.maxX { fixed.origin.x = max(display.minX, display.maxX - fixed.width) }
@@ -761,8 +802,8 @@ public final class SmartArranger {
         let safe = PlanValidator.sanitized(composed, for: request)
         // The window flies into main and the old main flies out to its new place, then the windows follow.
         let cards = previewCards(for: safe, choices: [choice], snapshot: snapshot).filter { $0.from.integral != $0.to.integral }
-        preview.flash(cards, caption: .init(text: L("Bring to Main", "移到主位"), index: 0, count: 0)) { [weak self] in
-            self?.apply(safe, to: snapshot, frontID: focused.id)
+        preview.flash(cards, caption: .init(text: L("Bring to Main", "移到主位"), index: 0, count: 0)) { [weak self] done in
+            self?.apply(safe, to: snapshot, frontID: focused.id, whenVisible: done)
         }
         remember(safe.choices, windows: request.windows)
         update(L("Brought \(focused.app) to main (\(choice.template))", "已把 \(focused.app) 移到主位（\(choice.template)）"), planner: "local")

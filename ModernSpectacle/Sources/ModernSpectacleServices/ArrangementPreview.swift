@@ -81,6 +81,7 @@ public final class ArrangementPreview {
 
     private var sheets: [Sheet] = []
     private var hideTask: Task<Void, Never>?
+    private var commitID: UUID?
     public private(set) var isVisible = false
 
     private static let flight: CFTimeInterval = 0.42
@@ -121,11 +122,25 @@ public final class ArrangementPreview {
         }
     }
 
-    /// Runs `apply` (the real windows jump into place under the sheet), then fades the sheet away.
-    public func commit(_ apply: @escaping () -> Void) {
-        guard isVisible else { return apply() }
-        apply()
-        dismiss(after: 0.05, fade: 0.22)
+    /// Runs `apply`, which moves the real windows under the sheet and calls `done` once the visible ones are in place;
+    /// the sheet fades then, or after 0.6 s at the latest so one slow app cannot hold the screen.
+    public func commit(_ apply: @escaping (_ done: @escaping @MainActor () -> Void) -> Void) {
+        guard isVisible else { return apply {} }
+        isVisible = false
+        let id = UUID()
+        commitID = id
+        apply { [weak self] in
+            guard let self, commitID == id else { return }
+            commitID = nil
+            dismiss(after: 0.02, fade: 0.2)
+        }
+        hideTask?.cancel()
+        hideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, let self, commitID == id else { return }
+            commitID = nil
+            dismiss(after: 0, fade: 0.2)
+        }
     }
 
     /// The cards fly back to where the windows still are, then the sheet goes.
@@ -140,7 +155,7 @@ public final class ArrangementPreview {
     }
 
     /// A short show for a single change (Bring to Main): animate, apply, fade.
-    public func flash(_ cards: [Card], caption: Caption, apply: @escaping () -> Void) {
+    public func flash(_ cards: [Card], caption: Caption, apply: @escaping (_ done: @escaping @MainActor () -> Void) -> Void) {
         show(cards, caption: caption)
         let wait = reduceMotion ? 0.12 : Self.flight + Self.stagger * Double(cards.count.clamped(to: 0...6))
         hideTask = Task { @MainActor [weak self] in
@@ -351,9 +366,9 @@ public final class ArrangementPreview {
     private func dismiss(after delay: TimeInterval, fade duration: TimeInterval) {
         hideTask?.cancel()
         let sheets = self.sheets
-        hideTask = Task { @MainActor [weak self] in
+        self.sheets = []
+        hideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled else { return }
             for sheet in sheets {
                 NSAnimationContext.runAnimationGroup({ context in
                     context.duration = duration
@@ -361,8 +376,7 @@ public final class ArrangementPreview {
                 }, completionHandler: nil)
             }
             try? await Task.sleep(for: .seconds(duration))
-            guard !Task.isCancelled else { return }
-            self?.tearDown()
+            for sheet in sheets { sheet.panel.orderOut(nil) }
         }
         isVisible = false
     }
