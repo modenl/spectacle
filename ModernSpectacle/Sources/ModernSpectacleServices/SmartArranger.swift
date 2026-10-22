@@ -1,7 +1,7 @@
 import AppKit
 import ModernSpectacleCore
 
-/// One hotkey: snapshot the desktop, rank the windows (cached, from Jev or Claude, or locally), fill the display's
+/// One hotkey: snapshot the desktop, rank the windows (cached, Apple's on-device model, or locally), fill the display's
 /// template from the ranking, apply it, and learn from what the user moves afterwards. Rankings are pre-computed in the
 /// background when the window set changes, so the hotkey usually applies instantly; pressing it again while the
 /// modifiers are still held cycles through the display's templates without asking the model again.
@@ -22,10 +22,10 @@ public final class SmartArranger {
 
     private let enumerator: WindowEnumerator
     private let windowController: WindowController
-    // Only exists while a model key is configured: it feeds the focus history and the learning.
+    // Feeds the focus history and the learning from the person's own moves.
     private var windowObserver: WindowObserver?
     private let suggestion = SuggestionPanel()
-    private let rankers: [RankingModel: any WindowRanker]
+    private let ranker: any WindowRanker
     private let historyURL: URL
     /// What the planner remembers. Shown and edited in the Profile window.
     public private(set) var history: LayoutHistory {
@@ -93,12 +93,12 @@ public final class SmartArranger {
     public init(
         windowController: WindowController,
         enumerator: WindowEnumerator = WindowEnumerator(),
-        rankers: [RankingModel: any WindowRanker] = [.jev: JevRanker(), .claude: ClaudeRanker()],
+        ranker: any WindowRanker = AppleRanker(),
         historyURL: URL = SmartArranger.defaultHistoryURL
     ) {
         self.windowController = windowController
         self.enumerator = enumerator
-        self.rankers = rankers
+        self.ranker = ranker
         self.historyURL = historyURL
         history = LayoutHistory.load(from: historyURL)
         focusTimeline = history.activity.map { ($0.bundleID, $0.app, $0.window, $0.date) }
@@ -123,28 +123,15 @@ public final class SmartArranger {
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flagsChanged) { flagsMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { flagsChanged($0); return $0 }) { flagsMonitors.append(local) }
-        apiKeyDidChange()
-    }
-
-    /// Starts or stops the model-backed features depending on whether the chosen model has a key.
-    public func apiKeyDidChange() {
-        cachedRanking = nil
-        if hasModelKey {
-            if windowObserver == nil {
-                let observer = WindowObserver()
-                observer.onSettled = { [weak self] settled in
-                    self?.handleUserMoves(settled)
-                }
-                observer.onFocusChanged = { [weak self] pid, title in
-                    self?.noteWindowFocus(pid: pid, title: title)
-                }
-                windowObserver = observer
-            }
-            schedulePrewarm()
-        } else {
-            windowObserver = nil
-            prewarmTask?.cancel()
+        let observer = WindowObserver()
+        observer.onSettled = { [weak self] settled in
+            self?.handleUserMoves(settled)
         }
+        observer.onFocusChanged = { [weak self] pid, title in
+            self?.noteWindowFocus(pid: pid, title: title)
+        }
+        windowObserver = observer
+        schedulePrewarm()
     }
 
     public static var defaultHistoryURL: URL {
@@ -152,14 +139,10 @@ public final class SmartArranger {
         return base.appendingPathComponent("ModernSpectacle/layout-history.json")
     }
 
-    /// The ranker for the model chosen in Settings, if its key is set; otherwise windows are ranked locally.
+    /// Apple's on-device model when it is available; otherwise (nil) windows are ranked locally.
     private var activeRanker: (any WindowRanker)? {
-        let hasKey = { (model: RankingModel) in model == .jev ? KeychainStore.hasJevKey : KeychainStore.hasAPIKey }
-        let model = RankingModel.effective(hasKey: hasKey)
-        return hasKey(model) ? rankers[model] : nil
+        AppleRanker.status == .available ? ranker : nil
     }
-
-    public var hasModelKey: Bool { activeRanker != nil }
 
     // MARK: - Arrange
 
@@ -338,9 +321,6 @@ public final class SmartArranger {
             self?.apply(safe, to: current.snapshot, whenVisible: done)
         }
         dumpLastArrangement(request: request, ranking: ranking, final: safe, rejected: current.snapshot.rejected, apps: current.snapshot.apps)
-        if let notes = ranking.notes, !notes.isEmpty {
-            history.notes = String(notes.prefix(2000))
-        }
         remember(choices, windows: request.windows)
         if let display = request.displays.first(where: { $0.id == current.focusedDisplay }) {
             let templates = LayoutTemplates.candidates(for: display)
@@ -619,7 +599,7 @@ public final class SmartArranger {
     // MARK: - Watching the user's own moves
 
     private func handleUserMoves(_ settled: WindowObserver.Settled) {
-        guard hasModelKey, Date() >= suppressObservationUntil, !suggestion.isVisible else { return }
+        guard Date() >= suppressObservationUntil, !suggestion.isVisible else { return }
         let now = Date()
         var moves = recentUserMoves[settled.pid, default: [:]].filter { now.timeIntervalSince($0.value) < Self.userMoveMemory }
         for title in settled.movedTitles { moves[title] = now }
@@ -720,7 +700,7 @@ public final class SmartArranger {
     }
 
     private func schedulePrewarm() {
-        guard prewarmEnabled, hasModelKey, AccessibilityPermission.isTrusted else { return }
+        guard prewarmEnabled, activeRanker != nil, AccessibilityPermission.isTrusted else { return }
         prewarmTask?.cancel()
         prewarmTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.prewarmDebounce))

@@ -25,26 +25,22 @@ public struct RankedWindow: Codable, Equatable, Sendable {
 public struct WindowRanking: Codable, Equatable, Sendable {
     /// Most relevant first.
     public var windows: [RankedWindow]
-    /// Who ranked: "jev", "claude" or "local".
+    /// Who ranked: "apple" or "local".
     public var source: String
-    /// Notes the model keeps about the person across runs (Claude only; Jev answers questions, it does not write).
-    public var notes: String?
-
-    public init(windows: [RankedWindow], source: String, notes: String? = nil) {
+    public init(windows: [RankedWindow], source: String) {
         self.windows = windows
         self.source = source
-        self.notes = notes
     }
 
     /// Sorted by relevance, ties broken by how recently each window had focus.
-    public static func sorted(_ windows: [RankedWindow], request: LayoutRequest, source: String, notes: String? = nil) -> WindowRanking {
+    public static func sorted(_ windows: [RankedWindow], request: LayoutRequest, source: String) -> WindowRanking {
         let recency = Dictionary(request.windows.map { ($0.id, $0.lastFocusedSecondsAgo ?? $0.appActiveSecondsAgo ?? .max) }, uniquingKeysWith: { a, _ in a })
         let ordered = windows.sorted { a, b in
             if a.relevance != b.relevance { return a.relevance > b.relevance }
             let (ra, rb) = (recency[a.id] ?? .max, recency[b.id] ?? .max)
             return ra != rb ? ra < rb : a.id < b.id
         }
-        return WindowRanking(windows: ordered, source: source, notes: notes)
+        return WindowRanking(windows: ordered, source: source)
     }
 
     /// A ranking made for an earlier snapshot, re-expressed with the ids of the windows open now (ids are only stable
@@ -54,7 +50,7 @@ public struct WindowRanking: Codable, Equatable, Sendable {
         let keys = windows.compactMap { keyOf[$0.id] }
         let idOf = LayoutTemplates.match(keys: keys, in: new)
         let mapped = windows.compactMap { ranked in keyOf[ranked.id].flatMap { idOf[$0] }.map { RankedWindow(id: $0, role: ranked.role, relevance: ranked.relevance) } }
-        return WindowRanking(windows: mapped, source: source, notes: notes)
+        return WindowRanking(windows: mapped, source: source)
     }
 
     /// Ids in the order given, with any window the ranker left out appended by recency.
@@ -63,12 +59,12 @@ public struct WindowRanking: Codable, Equatable, Sendable {
         let missing = request.windows.filter { !known.contains($0.id) }
         let fallback = LocalRanker.rank(LayoutRequest(displays: request.displays, windows: missing, recentApps: request.recentApps, corrections: [], notes: "", localTime: request.localTime, focusedWindowID: request.focusedWindowID))
         let present = Set(request.windows.map(\.id))
-        return WindowRanking(windows: windows.filter { present.contains($0.id) } + fallback.windows, source: source, notes: notes)
+        return WindowRanking(windows: windows.filter { present.contains($0.id) } + fallback.windows, source: source)
     }
 }
 
 /// Ranking without a model: the focused window, then by how recently each window or its app had focus. Roles come from
-/// the kind of app. Used when no model key is set and whenever the model cannot be reached.
+/// the kind of app. Used where Apple's on-device model is not available, and whenever it fails.
 public enum LocalRanker {
     public static func rank(_ request: LayoutRequest) -> WindowRanking {
         let windows = request.windows.map { window -> RankedWindow in

@@ -6,11 +6,10 @@ import ModernSpectacleServices
 // Developer tool: inspect the snapshot the ranker sees and try rankers without the app.
 //
 //   spectacle-cli snapshot            print the windows and displays as JSON
-//   spectacle-cli plan [--jev|--claude|--local]
-//                                     rank the windows, fill each display's first template, print both
+//   spectacle-cli plan [--local]      rank the windows (Apple's on-device model, or --local), fill each display's
+//                                     first template, print both
 //   spectacle-cli plan --sample …     the same for a built-in sample desktop (no Accessibility needed)
 //   spectacle-cli arrange …           rank, fill and apply
-//                                     Keys come from TYPESAFE_API_KEY / ANTHROPIC_API_KEY, else the keychain.
 //   spectacle-cli trigger             ask the running app to Smart Arrange (same as pressing the Smart Arrange shortcut)
 //   spectacle-cli trigger <command> [argument]
 //                                     ask the running app to run a WindowAction by name (leftHalf, promoteFocused…),
@@ -20,10 +19,9 @@ import ModernSpectacleServices
 func run() async {
     let args = Array(CommandLine.arguments.dropFirst())
     guard let command = args.first else {
-        print("usage: spectacle-cli snapshot | plan [--heuristic|--sample] | arrange [--heuristic]")
+        print("usage: spectacle-cli snapshot | plan [--local] [--sample] | arrange [--local] | trigger [command]")
         exit(2)
     }
-    // `trigger` must not touch the keychain: reading an item the app created makes macOS show a permission dialog.
     if command == "trigger", args.count >= 2, args[1] != "--fresh" {
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("xyz.alvumo.ModernSpectacle.command"), object: nil,
@@ -40,15 +38,8 @@ func run() async {
         print("sent")
         return
     }
-    let environment = ProcessInfo.processInfo.environment
-    let ranker: (any WindowRanker)?
-    if args.contains("--local") {
-        ranker = nil
-    } else if args.contains("--claude") {
-        ranker = ClaudeRanker(apiKeyProvider: { environment["ANTHROPIC_API_KEY"] ?? KeychainStore.string(for: KeychainStore.apiKeyAccount) })
-    } else {
-        ranker = JevRanker(apiKeyProvider: { environment["TYPESAFE_API_KEY"] ?? KeychainStore.string(for: KeychainStore.jevKeyAccount) })
-    }
+    let ranker: (any WindowRanker)? = args.contains("--local") || AppleRanker.status != .available ? nil : AppleRanker()
+    if ranker == nil, !args.contains("--local") { print("Apple's on-device model: \(AppleRanker.status); ranking locally") }
 
     let request: LayoutRequest
     let snapshot: WindowEnumerator.Snapshot?

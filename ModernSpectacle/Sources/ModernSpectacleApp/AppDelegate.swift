@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installMainMenu()
         installStatusItem()
         model.refreshPermissions()
-        model.onAPIKeyChange = { [weak self] in self?.rebuildMenu() }
+        model.onMenuChange = { [weak self] in self?.rebuildMenu() }
         model.arranger.onPresetsChange = { [weak self] in self?.rebuildMenu() }
         model.onLanguageChange = { [weak self] in self?.rebuildMenu() }
         model.onBusyChange = { [weak self] busy in

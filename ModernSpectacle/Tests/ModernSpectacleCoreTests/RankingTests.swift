@@ -69,31 +69,22 @@ struct RankingTests {
     }
 
     @Test
-    func jevRequestAsksTwoQuestionsPerWindowAndParsesTheAnswers() throws {
-        let req = request(laptop, [window(1, "claude", .coding, focused: true), window(2, "slack", .chat)])
-        let body = JevRankingRequest.body(for: req)
-        #expect(body.model == "jev-latest")
-        #expect(Set(body.questions.keys) == ["relevance-1", "role-1", "relevance-2", "role-2"])
-        #expect(body.questions["relevance-1"]?.type == "score")
-        #expect(body.questions["role-2"]?.criteria == .options(["task": "Needed for the current task: keep it visible next to the main window", "awareness": "Kept an eye on but not worked in: chat, mail, calendar, monitors, music", "background": "Not needed now: can wait hidden"]))
-        // Encodes the way the API expects: criteria as an array of levels or a map of options.
-        let json = String(decoding: try JSONEncoder().encode(body), as: UTF8.self)
-        #expect(json.contains(#""criteria":["Unrelated"#))
-
-        let response = #"{"model":"jev-1.13.0","answers":{"relevance-1":{"type":"score","score":2.9,"confidence":0.8},"role-1":{"type":"choice","choice":"task","confidence":0.9},"relevance-2":{"type":"score","score":0.4},"role-2":{"type":"choice","choice":"awareness"}},"usage":{"input_tokens":300,"output_tokens":20}}"#
-        let ranked = try JevRankingRequest.ranking(fromResponse: Data(response.utf8), request: req)
-        #expect(ranked.windows.map(\.id) == [1, 2])
-        #expect(ranked.windows.map(\.role) == [.task, .awareness])
-        #expect(ranked.source == "jev")
+    func theModelsOrderBecomesTheRankingAndForgottenWindowsAreAppended() {
+        let req = request(laptop, [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "slack", .chat)])
+        // As the on-device model might answer: a repeat and an id that does not exist, and Slack left out.
+        let ranked = RankingPrompt.ranking(fromOrdered: [(2, .task), (1, .task), (2, .task), (99, .task)], request: req, source: "apple")
+        #expect(ranked.windows.map(\.id) == [2, 1, 3])
+        #expect(ranked.windows.map(\.role) == [.task, .task, .awareness])
+        #expect(ranked.source == "apple")
     }
 
     @Test
-    func claudeRankingKeepsTheModelsOrderAndCoversForgottenWindows() throws {
-        let req = request(laptop, [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "slack", .chat)])
-        let text = #"{"windows":[{"id":2,"role":"task"},{"id":1,"role":"task"},{"id":2,"role":"task"},{"id":99,"role":"task"}],"notes":"likes iTerm next to Claude"}"#
-        let ranked = try ClaudeRankingPrompt.ranking(fromModelJSON: text, request: req)
-        #expect(ranked.windows.map(\.id) == [2, 1, 3]) // duplicates and unknown ids dropped, Slack appended
-        #expect(ranked.notes == "likes iTerm next to Claude")
+    func theModelSeesACompactState() throws {
+        let many = (1...40).map { window($0, "app\($0)", .coding, focused: $0 == 1) }
+        let state = RankingState(request(laptop, many))
+        #expect(state.windows.count == 30)
+        let long = request(laptop, [WindowInfo(id: 1, app: "a", bundleID: "a", kind: .coding, title: String(repeating: "x", count: 200), frame: .zero, displayID: 0, isFocused: true, appActiveSecondsAgo: nil)])
+        #expect(RankingState(long).windows[0].title.count == 60)
     }
 
     @Test

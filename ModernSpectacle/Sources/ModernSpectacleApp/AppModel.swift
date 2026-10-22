@@ -7,19 +7,11 @@ final class AppModel {
     private(set) var accessibilityTrusted: Bool = AccessibilityPermission.isTrusted
     private(set) var shortcutsEnabled = true
     private(set) var arrangeStatus = L("Idle", "空闲")
-    /// Human-readable state of each provider's stored key (its shape and whether the API accepts it); never the key.
-    struct KeyState {
-        var status: String
-        var valid = false
-    }
-    private(set) var keys: [RankingModel: KeyState] = Dictionary(uniqueKeysWithValues: RankingModel.allCases.map { model in
-        (model, KeyState(status: AppModel.hasKey(model) ? L("Stored, not checked yet", "已保存，尚未检查") : L("Not set", "未设置")))
-    })
 
     /// Called after any state above changes so the UI can re-read it.
     var onChange: (() -> Void)?
-    /// Called when a key is added or removed, or the shortcuts change, so the menu can follow.
-    var onAPIKeyChange: (() -> Void)?
+    /// Called when the shortcuts change, so the menu can follow.
+    var onMenuChange: (() -> Void)?
     /// True while Smart Arrange is waiting for the model; the menu bar icon reflects it.
     var onBusyChange: ((Bool) -> Void)?
     /// Called after the UI language changes, so menus and windows rebuild their text.
@@ -278,72 +270,6 @@ final class AppModel {
         onChange?()
     }
 
-    // MARK: - Ranking model and keys
-
-    private static func account(for model: RankingModel) -> String {
-        model == .jev ? KeychainStore.jevKeyAccount : KeychainStore.apiKeyAccount
-    }
-
-    static func hasKey(_ model: RankingModel) -> Bool {
-        model == .jev ? KeychainStore.hasJevKey : KeychainStore.hasAPIKey
-    }
-
-    func hasKey(_ model: RankingModel) -> Bool { Self.hasKey(model) }
-
-    var rankingModel: RankingModel { RankingModel.effective(hasKey: Self.hasKey) }
-
-    func setRankingModel(_ model: RankingModel) {
-        RankingModel.chosen = model
-        smartArranger.apiKeyDidChange()
-        onChange?()
-    }
-
-    /// An empty key removes it.
-    func saveKey(_ key: String, for model: RankingModel) {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            try KeychainStore.set(trimmed, for: Self.account(for: model))
-        } catch {
-            NSLog("Could not store API key: \(error)")
-            keys[model] = KeyState(status: L("Could not save to Keychain (error \(error))", "无法保存到钥匙串（错误 \(error)）"))
-        }
-        smartArranger.apiKeyDidChange()
-        onAPIKeyChange?()
-        if hasKey(model) {
-            checkKey(for: model)
-        } else {
-            keys[model] = KeyState(status: L("Not set", "未设置"))
-            onChange?()
-        }
-    }
-
-    /// Describes the key's shape, then asks the provider whether it is accepted. Never shows the key itself.
-    func checkKey(for model: RankingModel) {
-        guard let key = KeychainStore.string(for: Self.account(for: model)), !key.isEmpty else {
-            keys[model] = KeyState(status: L("Not set", "未设置"))
-            onChange?()
-            return
-        }
-        let shape = L("\(key.prefix(7))… \(key.count) chars", "\(key.prefix(7))…，\(key.count) 个字符")
-        if model == .claude, !key.hasPrefix("sk-ant-") {
-            keys[model] = KeyState(status: L("Looks wrong: Anthropic keys start with sk-ant-api03- (got \(shape))", "格式不对：Anthropic 的 Key 以 sk-ant-api03- 开头（当前是 \(shape)）"))
-            onChange?()
-            return
-        }
-        keys[model] = KeyState(status: L("Checking \(shape)…", "正在检查 \(shape)…"))
-        onChange?()
-        Task { [weak self] in
-            let result = model == .jev ? await JevRanker.check(apiKey: key) : await ClaudeRanker.check(apiKey: key)
-            guard let self else { return }
-            switch result {
-            case .valid: keys[model] = KeyState(status: L("Valid (\(shape))", "有效（\(shape)）"), valid: true)
-            case let .invalid(detail): keys[model] = KeyState(status: L("Rejected by the API: \(detail)", "API 拒绝了这个 Key：\(detail)"))
-            case let .unreachable(detail): keys[model] = KeyState(status: L("Could not reach the API: \(detail)", "连不上 API：\(detail)"))
-            }
-            onChange?()
-        }
-    }
-
     // MARK: - Shortcuts
 
     /// While a new shortcut is being recorded, the global hotkeys must not fire (they would swallow the key press).
@@ -358,7 +284,7 @@ final class AppModel {
     /// Re-registers the hotkeys and refreshes the menu after the user changed a shortcut.
     func shortcutsDidChange() {
         if shortcutsEnabled { registerShortcuts() }
-        onAPIKeyChange?()
+        onMenuChange?()
         onChange?()
     }
 

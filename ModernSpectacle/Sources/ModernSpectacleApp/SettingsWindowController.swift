@@ -11,10 +11,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let loginToggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let updatesToggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let rankingPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let modelStatus = NSTextField(labelWithString: "")
     private let loginError = NSTextField(wrappingLabelWithString: "")
     private let arrangeStatus = NSTextField(wrappingLabelWithString: "")
-    private lazy var keyRows: [RankingModel: KeyRow] = Dictionary(uniqueKeysWithValues: RankingModel.allCases.map { ($0, KeyRow(provider: $0, model: model)) })
     private var shortcutButtons: [WindowAction: NSButton] = [:]
     private let shortcutMessage = NSTextField(wrappingLabelWithString: "")
     private var recording: WindowAction?
@@ -53,12 +52,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             languagePopup.lastItem?.representedObject = language.rawValue
         }
         languagePopup.selectItem(at: AppLanguage.allCases.firstIndex(of: Localization.language) ?? 0)
-        rankingPopup.removeAllItems()
-        for ranking in RankingModel.allCases {
-            rankingPopup.addItem(withTitle: ranking.title)
-            rankingPopup.lastItem?.representedObject = ranking.rawValue
-        }
-        keyRows.values.forEach { $0.relabel() }
         let content = buildContent()
         window?.contentView = scrolling(content)
         // As tall as the content, but never taller than the screen: the shortcut list alone is longer than a laptop's.
@@ -99,8 +92,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         loginError.stringValue = model.loginItems.lastError ?? ""
         loginError.isHidden = model.loginItems.lastError == nil
 
-        rankingPopup.selectItem(at: RankingModel.allCases.firstIndex(of: model.rankingModel) ?? 0)
-        keyRows.values.forEach { $0.refresh() }
+        switch AppleRanker.status {
+        case .available:
+            modelStatus.stringValue = L("Apple Intelligence: on this Mac, nothing leaves it", "Apple Intelligence：在本机运行，数据不离开这台 Mac")
+            modelStatus.textColor = .systemGreen
+        case .notReady:
+            modelStatus.stringValue = L("Apple Intelligence: model still downloading", "Apple Intelligence：模型还在下载")
+            modelStatus.textColor = .systemOrange
+        case .notEnabled:
+            modelStatus.stringValue = L("Apple Intelligence is off", "Apple Intelligence 未开启")
+            modelStatus.textColor = .systemOrange
+        case .unsupported:
+            modelStatus.stringValue = L("Apple Intelligence is not available on this Mac", "这台 Mac 不支持 Apple Intelligence")
+            modelStatus.textColor = .secondaryLabelColor
+        }
         arrangeStatus.stringValue = model.arrangeStatus
         updatesToggle.state = model.updates.automaticChecks ? .on : .off
         for (action, button) in shortcutButtons where action != recording {
@@ -118,8 +123,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         updatesToggle.action = #selector(toggleUpdates)
         languagePopup.target = self
         languagePopup.action = #selector(languageChanged)
-        rankingPopup.target = self
-        rankingPopup.action = #selector(rankingChanged)
         shortcutMessage.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         shortcutMessage.preferredMaxLayoutWidth = 480
     }
@@ -150,14 +153,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(small(L("Version \(UpdateChecker.currentVersion)", "版本 \(UpdateChecker.currentVersion)")))
 
         stack.addArrangedSubview(header(L("Smart Arrange", "智能排列")))
-        stack.addArrangedSubview(row(L("Ranking model", "排序模型"), trailing: rankingPopup))
+        let intelligenceButton = NSButton(title: L("Open Settings", "打开设置"), target: self, action: #selector(openAppleIntelligence))
+        let modelRow = NSStackView(views: [modelStatus, intelligenceButton])
+        modelRow.orientation = .horizontal
+        stack.addArrangedSubview(modelRow)
         stack.addArrangedSubview(small(L(
-            "The model only decides which windows matter now; templates and sizes are computed on this Mac. Without a key for the chosen model, windows are ranked locally by focus and recency.",
-            "模型只判断哪些窗口当前重要，模版和尺寸都在本机计算。所选模型没有 Key 时，按焦点和最近使用在本地排序。"
+            "Apple's on-device model decides which windows matter now; templates and sizes are computed on this Mac. Without it, windows are ranked by focus and recency.",
+            "由 Apple 本机模型判断哪些窗口当前重要，模版和尺寸都在本机计算。模型不可用时，按焦点和最近使用排序。"
         )))
-        for provider in RankingModel.allCases {
-            stack.addArrangedSubview(keyRows[provider]!.view)
-        }
         let profileButton = NSButton(title: L("Layout Profile…", "布局档案…"), target: self, action: #selector(openProfile))
         stack.addArrangedSubview(profileButton)
         stack.addArrangedSubview(row(L("Last arrangement", "上次排列"), trailing: arrangeStatus))
@@ -321,9 +324,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         model.setLanguage(language)
     }
 
-    @objc private func rankingChanged() {
-        guard let raw = rankingPopup.selectedItem?.representedObject as? String, let ranking = RankingModel(rawValue: raw) else { return }
-        model.setRankingModel(ranking)
+    @objc private func openAppleIntelligence() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension") { NSWorkspace.shared.open(url) }
     }
 
     @objc private func openProfile() {
@@ -333,124 +335,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         stopRecording()
         model.settingsDidClose()
-    }
-}
-
-/// One provider's key: status, a single-line field that can show or hide the key, Save, Test and Remove.
-@MainActor
-private final class KeyRow: NSObject {
-    let provider: RankingModel
-    private let model: AppModel
-    private let title = NSTextField(labelWithString: "")
-    private let status = NSTextField(labelWithString: "")
-    private let check = NSTextField(wrappingLabelWithString: "")
-    private let secureField = NSSecureTextField()
-    private let plainField = NSTextField()
-    private let showToggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let saveButton = NSButton(title: "", target: nil, action: nil)
-    private let testButton = NSButton(title: "", target: nil, action: nil)
-    private let removeButton = NSButton(title: "", target: nil, action: nil)
-    private(set) lazy var view: NSView = build()
-
-    private var draft: String {
-        showToggle.state == .on ? plainField.stringValue : secureField.stringValue
-    }
-
-    init(provider: RankingModel, model: AppModel) {
-        self.provider = provider
-        self.model = model
-        super.init()
-        for field in [secureField, plainField] as [NSTextField] {
-            field.target = self
-            field.action = #selector(save)
-            // One scrolling line: a 100+ character key must not wrap and grow the window.
-            field.usesSingleLineMode = true
-            field.cell?.wraps = false
-            field.cell?.isScrollable = true
-            field.lineBreakMode = .byClipping
-            field.widthAnchor.constraint(equalToConstant: 320).isActive = true
-            NotificationCenter.default.addObserver(self, selector: #selector(draftChanged), name: NSControl.textDidChangeNotification, object: field)
-        }
-        plainField.isHidden = true
-        showToggle.target = self
-        showToggle.action = #selector(toggleShow)
-        saveButton.target = self
-        saveButton.action = #selector(save)
-        testButton.target = self
-        testButton.action = #selector(test)
-        removeButton.target = self
-        removeButton.action = #selector(remove)
-        check.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        check.preferredMaxLayoutWidth = 480
-        relabel()
-    }
-
-    func relabel() {
-        title.stringValue = provider == .jev ? L("TypeSafe API key (Jev)", "TypeSafe API Key（Jev）") : L("Anthropic API key (Claude)", "Anthropic API Key（Claude）")
-        let placeholder = provider == .jev ? L("Paste your TypeSafe key, then Save", "粘贴 TypeSafe Key，然后保存") : L("Paste key (starts with sk-ant-), then Save", "粘贴 Key（以 sk-ant- 开头），然后保存")
-        secureField.placeholderString = placeholder
-        plainField.placeholderString = placeholder
-        showToggle.title = L("Show", "显示")
-        saveButton.title = L("Save", "保存")
-        testButton.title = L("Test", "测试")
-        removeButton.title = L("Remove", "删除")
-    }
-
-    private func build() -> NSView {
-        let header = NSStackView(views: [title, status])
-        header.orientation = .horizontal
-        header.spacing = 12
-        let fields = NSStackView(views: [secureField, plainField, showToggle, saveButton])
-        fields.orientation = .horizontal
-        let buttons = NSStackView(views: [testButton, removeButton])
-        buttons.orientation = .horizontal
-        let stack = NSStackView(views: [header, fields, buttons, check])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 6
-        return stack
-    }
-
-    func refresh() {
-        let hasKey = model.hasKey(provider)
-        status.stringValue = hasKey ? L("Stored in Keychain", "已存入钥匙串") : L("Not set", "未设置")
-        status.textColor = hasKey ? .secondaryLabelColor : .tertiaryLabelColor
-        let state = model.keys[provider]
-        check.stringValue = state?.status ?? ""
-        check.textColor = state?.valid == true ? .systemGreen : (hasKey ? .systemRed : .secondaryLabelColor)
-        check.isHidden = !hasKey
-        removeButton.isEnabled = hasKey
-        testButton.isEnabled = hasKey
-        saveButton.isEnabled = !draft.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    @objc private func draftChanged() {
-        saveButton.isEnabled = !draft.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    @objc private func toggleShow() {
-        let showing = showToggle.state == .on
-        if showing { plainField.stringValue = secureField.stringValue } else { secureField.stringValue = plainField.stringValue }
-        plainField.isHidden = !showing
-        secureField.isHidden = showing
-        view.window?.makeFirstResponder(showing ? plainField : secureField)
-    }
-
-    @objc private func save() {
-        let key = draft
-        guard !key.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        model.saveKey(key, for: provider)
-        secureField.stringValue = ""
-        plainField.stringValue = ""
-        refresh()
-    }
-
-    @objc private func test() {
-        model.checkKey(for: provider)
-    }
-
-    @objc private func remove() {
-        model.saveKey("", for: provider)
     }
 }
 
