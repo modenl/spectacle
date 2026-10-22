@@ -31,6 +31,11 @@ final class Updater: NSObject, SPUUpdaterDelegate {
         controller.checkForUpdates(nil)
     }
 
+    /// The scheduled check, run now: with automatic updates on, Sparkle downloads without asking and installs on quit.
+    func checkInBackground() {
+        controller.updater.checkForUpdatesInBackground()
+    }
+
     nonisolated func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
         guard let error = error as NSError? else { return }
         let message = error.domain == SUSparkleErrorDomain && error.code == Int(SUError.noUpdateError.rawValue)

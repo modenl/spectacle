@@ -74,7 +74,7 @@ final class AppModel {
             }
         }
         // `spectacle-cli trigger <command> [argument]` posts this: any WindowAction by name, restore <n>, save <name>,
-        // delete <name>, check-updates, show-notices. Lets every feature be exercised without pressing keys.
+        // delete <name>, check-updates, check-updates-quietly, quit, show-notices. Lets every feature be exercised without pressing keys.
         commandObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("xyz.alvumo.ModernSpectacle.command"), object: nil, queue: .main
         ) { [weak self] note in
@@ -92,6 +92,8 @@ final class AppModel {
         case "save": if requireAccessibility() { smartArranger.savePreset(named: argument) }
         case "delete": smartArranger.deletePreset(named: argument)
         case "check-updates": updater.checkNow()
+        case "check-updates-quietly": updater.checkInBackground()
+        case "quit": NSApp.terminate(nil) // a normal quit, so Sparkle installs a downloaded update
         // Shows the permission notice and the HUD with sample text, to check their layout.
         case "show-notices":
             hud.show(L("Checking for updates…", "正在检查更新…"), near: mainDisplayFrame, autoHideAfter: 10)
