@@ -63,8 +63,10 @@ public final class WindowEnumerator {
             let secondsAgo = lastActive[bundleID].map { Int(now.timeIntervalSince($0)) }
             let appIsFrontmost = app.processIdentifier == frontmostPID
 
+            let listStarted = Date()
             let (axWindows, note) = accessibilityClient.windowsWithStatus(of: app.processIdentifier)
-            appLines.append("\(name): \(axWindows.count) windows\(app.isHidden ? ", hidden" : "")\(note.isEmpty ? "" : " (\(note))")")
+            let listMs = Int(Date().timeIntervalSince(listStarted) * 1000)
+            appLines.append("\(name): \(axWindows.count) windows\(app.isHidden ? ", hidden" : "")\(note.isEmpty ? "" : " (\(note))")\(listMs >= 50 ? ", slow: \(listMs) ms to list" : "")")
             for window in axWindows {
                 guard window.isStandardWindow else {
                     rejected.append("\(name): \(window.title.prefix(40)) (\(window.debugDescription))")

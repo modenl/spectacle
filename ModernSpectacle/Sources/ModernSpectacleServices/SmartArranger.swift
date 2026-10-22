@@ -165,7 +165,7 @@ public final class SmartArranger {
         }
         let started = Date()
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: started)
-        for app in snapshot.apps where app.contains("retried") { Self.log(app) } // app names and error codes only
+        for app in snapshot.apps where app.contains("retried") || app.contains("slow:") { Self.log(app) } // app names, counts, times only
         let request = makeRequest(from: snapshot, now: started)
         guard !request.windows.isEmpty else {
             update(L("No windows to arrange", "没有可排列的窗口"), planner: nil)
@@ -458,7 +458,16 @@ public final class SmartArranger {
         let byApp = Dictionary(grouping: jobs, by: \.pid)
         return await withTaskGroup(of: [Moved].self) { group in
             for appJobs in byApp.values {
-                group.addTask { appJobs.compactMap(move) }
+                group.addTask {
+                    let started = Date()
+                    let moved = appJobs.compactMap(move)
+                    let ms = Int(Date().timeIntervalSince(started) * 1000)
+                    if ms >= 150, let app = appJobs.first?.app {
+                        let message = "slow: \(app) took \(ms) ms to move \(appJobs.count) window(s)"
+                        await MainActor.run { log(message) }
+                    }
+                    return moved
+                }
             }
             var all: [Moved] = []
             for await moved in group { all += moved }
@@ -470,7 +479,7 @@ public final class SmartArranger {
         guard let before = job.window.frame, before.integral != job.target.integral else { return nil }
         // No correction right after: an app that resizes asynchronously still reports its old size here, and moving
         // it "back inside" would fight its own resize. The settle passes check later.
-        job.window.setFrame(job.target)
+        job.window.setFrame(job.target, from: before)
         return Moved(job: job, before: before)
     }
 

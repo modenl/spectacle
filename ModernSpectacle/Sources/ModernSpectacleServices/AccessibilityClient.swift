@@ -100,7 +100,11 @@ public struct ManagedWindow: Equatable, @unchecked Sendable {
         return (rawValue as? Bool) ?? false
     }
 
-    public func setFrame(_ frame: CGRect) {
+    /// With the current frame known, each window is resized at most once: a resize is what costs time, because apps
+    /// lay out their content again (iTerm reflows its whole scrollback). A window that only moves is not resized at all;
+    /// one that shrinks is resized before it moves, so it never sticks out past the screen edge on the way. Without it,
+    /// size is set before and after the position, for apps that clamp the size while moving.
+    public func setFrame(_ frame: CGRect, from current: CGRect? = nil) {
         var origin = frame.origin
         var size = frame.size
         guard
@@ -109,12 +113,23 @@ public struct ManagedWindow: Equatable, @unchecked Sendable {
         else {
             return
         }
+        let setSize = { _ = AXUIElementSetAttributeValue(self.element, kAXSizeAttribute as CFString, dimensions) }
+        let setPosition = { _ = AXUIElementSetAttributeValue(self.element, kAXPositionAttribute as CFString, position) }
 
         withoutEnhancedInterface {
-            // Some apps clamp size during movement, so size is applied before and after position.
-            AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
-            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, position)
-            AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
+            guard let current else {
+                setSize(); setPosition(); setSize()
+                return
+            }
+            let resize = abs(current.width - frame.width) > 0.5 || abs(current.height - frame.height) > 0.5
+            let move = abs(current.minX - frame.minX) > 0.5 || abs(current.minY - frame.minY) > 0.5
+            let shrinking = frame.width <= current.width && frame.height <= current.height
+            switch (resize, move) {
+            case (false, false): break
+            case (false, true): setPosition()
+            case (true, false): setSize()
+            case (true, true): if shrinking { setSize(); setPosition() } else { setPosition(); setSize() }
+            }
         }
     }
 
