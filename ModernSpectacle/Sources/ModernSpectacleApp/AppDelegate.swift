@@ -12,6 +12,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         model.refreshPermissions()
         model.onAPIKeyChange = { [weak self] in self?.rebuildMenu() }
+        model.onBusyChange = { [weak self] busy in
+            guard let button = self?.statusItem?.button else { return }
+            button.image = NSImage(
+                systemSymbolName: busy ? "sparkles" : "rectangle.3.group",
+                accessibilityDescription: busy ? "Arranging" : "Modern Spectacle"
+            )
+            button.image?.isTemplate = true
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -68,9 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showSettings()
         })
 
+        menu.addItem(menuItem("Layout Profile...") { [weak self] in
+            self?.model.showProfile()
+        })
+
         menu.addItem(.separator())
 
-        addActionItems([.smartArrange], to: menu)
+        addActionItems([.smartArrange, .promoteFocused], to: menu)
         menu.addItem(.separator())
         addActionItems([.center, .maximize], to: menu)
         menu.addItem(.separator())
@@ -103,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func addActionItems(_ actions: [WindowAction], to menu: NSMenu) {
         for action in actions {
-            let needsKey = action == .smartArrange && !model.hasAPIKey
+            let needsKey = (action == .smartArrange || action == .promoteFocused) && !model.hasAPIKey
             let item = menuItem(needsKey ? "\(action.title) (needs API key)" : action.title) { [weak self] in
                 self?.model.perform(action)
             }
@@ -164,6 +176,8 @@ private extension WindowAction {
             "z"
         case .smartArrange:
             "a"
+        case .promoteFocused:
+            "\r"
         }
     }
 
@@ -175,7 +189,7 @@ private extension WindowAction {
             [.control, .command]
         case .lowerLeft, .lowerRight:
             [.control, .shift, .command]
-        case .nextDisplay, .previousDisplay, .smartArrange:
+        case .nextDisplay, .previousDisplay, .smartArrange, .promoteFocused:
             [.control, .option, .command]
         case .nextThird, .previousThird:
             [.control, .option]

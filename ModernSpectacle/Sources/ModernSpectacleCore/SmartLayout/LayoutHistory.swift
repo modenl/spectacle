@@ -5,12 +5,29 @@ public struct ArrangementRecord: Codable, Equatable, Sendable {
     public var planner: String
     public var summary: String
     public var windowCount: Int
+    /// Hotkey press to windows moved, in milliseconds.
+    public var durationMs: Int?
 
-    public init(date: Date, planner: String, summary: String, windowCount: Int) {
+    public init(date: Date, planner: String, summary: String, windowCount: Int, durationMs: Int? = nil) {
         self.date = date
         self.planner = planner
         self.summary = summary
         self.windowCount = windowCount
+        self.durationMs = durationMs
+    }
+}
+
+public struct ActivityRecord: Codable, Equatable, Sendable {
+    public var bundleID: String
+    public var app: String
+    public var window: String
+    public var date: Date
+
+    public init(bundleID: String, app: String, window: String, date: Date) {
+        self.bundleID = bundleID
+        self.app = app
+        self.window = window
+        self.date = date
     }
 }
 
@@ -24,11 +41,13 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
     public var arrangements: [ArrangementRecord] = []
     /// Learned from the user's own moves: how each app's windows should be arranged.
     public var appStyles: [String: ArrangementStyle] = [:]
+    /// Recent app/window switches, newest first, so a relaunch still knows what the person was doing.
+    public var activity: [ActivityRecord] = []
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case notes, corrections, arrangements, appStyles
+        case notes, corrections, arrangements, appStyles, activity
     }
 
     public init(from decoder: Decoder) throws {
@@ -37,6 +56,7 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
         corrections = try container.decodeIfPresent([LayoutCorrection].self, forKey: .corrections) ?? []
         arrangements = try container.decodeIfPresent([ArrangementRecord].self, forKey: .arrangements) ?? []
         appStyles = try container.decodeIfPresent([String: ArrangementStyle].self, forKey: .appStyles) ?? [:]
+        activity = try container.decodeIfPresent([ActivityRecord].self, forKey: .activity) ?? []
     }
 
     public mutating func record(_ correction: LayoutCorrection) {

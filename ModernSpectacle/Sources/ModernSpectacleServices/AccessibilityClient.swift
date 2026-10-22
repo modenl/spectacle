@@ -47,14 +47,40 @@ public struct ManagedWindow: Equatable {
         return role != kAXSheetRole && subrole != kAXSystemDialogSubrole
     }
 
-    /// True for ordinary document/app windows: not panels, sheets, dialogs or popovers.
+    /// True for ordinary app windows. Some apps report no subrole at all, and Electron apps (Codex, ChatGPT) label real
+    /// windows as dialogs, so a resizable "dialog" of reasonable size counts as a window too.
     public var isStandardWindow: Bool {
-        stringValue(for: kAXRoleAttribute) == kAXWindowRole
-            && stringValue(for: kAXSubroleAttribute) == kAXStandardWindowSubrole
+        guard stringValue(for: kAXRoleAttribute) == kAXWindowRole else { return false }
+        let subrole = stringValue(for: kAXSubroleAttribute)
+        if subrole == nil || subrole == kAXStandardWindowSubrole || subrole == "AXUnknown" { return true }
+        // A real dialog has only a close button; an app window mislabelled as a dialog still has minimize and zoom.
+        if subrole == kAXDialogSubrole, hasWindowButtons, let frame, frame.width >= 300, frame.height >= 200 { return true }
+        return false
+    }
+
+    public var hasWindowButtons: Bool {
+        var minimize: CFTypeRef?
+        var zoom: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, kAXMinimizeButtonAttribute as CFString, &minimize) == .success
+            && AXUIElementCopyAttributeValue(element, kAXZoomButtonAttribute as CFString, &zoom) == .success
+    }
+
+    public var debugDescription: String {
+        let size = frame.map { "\(Int($0.width))x\(Int($0.height))" } ?? "no frame"
+        return "\(roleDescription) \(size) resizable=\(isResizable) buttons=\(hasWindowButtons) minimized=\(isMinimized)"
+    }
+
+    public var isResizable: Bool {
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, kAXSizeAttribute as CFString, &settable) == .success && settable.boolValue
     }
 
     public var title: String {
         stringValue(for: kAXTitleAttribute) ?? ""
+    }
+
+    public var roleDescription: String {
+        "\(stringValue(for: kAXRoleAttribute) ?? "nil")/\(stringValue(for: kAXSubroleAttribute) ?? "nil")"
     }
 
     public var isMinimized: Bool {

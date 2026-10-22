@@ -24,19 +24,27 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
     public let name = "claude-haiku-5-5"
     public let model = "claude-haiku-5-5"
 
-    private let session: URLSession
+    private let timeout: TimeInterval
     private let apiKeyProvider: @Sendable () -> String?
 
     public init(
         timeout: TimeInterval = 12,
         apiKeyProvider: @escaping @Sendable () -> String? = { KeychainStore.string(for: KeychainStore.apiKeyAccount) }
     ) {
+        self.timeout = timeout
+        self.apiKeyProvider = apiKeyProvider
+    }
+
+    /// A fresh session per call, torn down afterwards, so no connection pool or cache stays resident between plans.
+    private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout
         configuration.waitsForConnectivity = false
-        session = URLSession(configuration: configuration)
-        self.apiKeyProvider = apiKeyProvider
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration)
     }
 
     public enum KeyCheck: Equatable, Sendable {
@@ -75,12 +83,20 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         urlRequest.httpBody = try requestBody(for: request)
 
+        let session = makeSession()
+        defer { session.invalidateAndCancel() }
         let (data, response) = try await session.data(for: urlRequest)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
             throw PlannerError.http(status, String(decoding: data, as: UTF8.self))
         }
-        return try parsePlan(from: data)
+        let choice = try parseTemplatePlan(from: data)
+        let design = LayoutTemplates.design(from: choice, for: request)
+        var plan = LayoutComposer.plan(from: design, for: request)
+        let picked = choice.displays.map { "\($0.template)" }.joined(separator: ", ")
+        plan.summary = "[\(picked)] " + plan.summary
+        plan.choices = choice.displays
+        return plan
     }
 
     func requestBody(for request: LayoutRequest) throws -> Data {
@@ -88,6 +104,8 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 4096,
+            // Lowest latency: no thinking pass, minimum effort. Layout is a fast structured task.
+            "thinking": ["type": "disabled"],
             "output_config": [
                 "effort": "low",
                 "format": ["type": "json_schema", "schema": schema],
@@ -106,7 +124,7 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         return try JSONSerialization.data(withJSONObject: body)
     }
 
-    func parsePlan(from data: Data) throws -> LayoutPlan {
+    func parseTemplatePlan(from data: Data) throws -> TemplatePlan {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw PlannerError.malformed("not a JSON object")
         }
@@ -124,6 +142,6 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         else {
             throw PlannerError.malformed("no text block")
         }
-        return try LayoutPrompt.decodePlan(from: text)
+        return try LayoutPrompt.decodeTemplatePlan(from: text)
     }
 }

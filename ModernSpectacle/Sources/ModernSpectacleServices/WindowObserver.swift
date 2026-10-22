@@ -12,6 +12,8 @@ public final class WindowObserver {
     }
 
     public var onSettled: ((Settled) -> Void)?
+    /// A window of this app got keyboard focus (pid, window title).
+    public var onFocusChanged: ((pid_t, String) -> Void)?
     public var settleDelay: TimeInterval = 0.7
 
     // The AX callback runs on the main run loop, so touching the main-actor owner from it is safe.
@@ -54,7 +56,7 @@ public final class WindowObserver {
         let box = Unmanaged.passRetained(Box(pid: pid, owner: self))
         let appElement = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(appElement, 0.25)
-        for name in [kAXWindowMovedNotification, kAXWindowResizedNotification] {
+        for name in [kAXWindowMovedNotification, kAXWindowResizedNotification, kAXFocusedWindowChangedNotification] {
             AXObserverAddNotification(observer, appElement, name as CFString, box.toOpaque())
         }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -69,14 +71,19 @@ public final class WindowObserver {
         pending[pid] = nil
     }
 
-    private static let callback: AXObserverCallback = { _, element, _, refcon in
+    private static let callback: AXObserverCallback = { _, element, notification, refcon in
         guard let refcon else { return }
         let box = Unmanaged<Box>.fromOpaque(refcon).takeUnretainedValue()
         let title = ManagedWindow(element: element).title
         let pid = box.pid
+        let isFocus = (notification as String) == kAXFocusedWindowChangedNotification
         MainActor.assumeIsolated {
             let owner = box.owner
-            owner?.noteChange(pid: pid, title: title)
+            if isFocus {
+                owner?.onFocusChanged?(pid, title)
+            } else {
+                owner?.noteChange(pid: pid, title: title)
+            }
         }
     }
 

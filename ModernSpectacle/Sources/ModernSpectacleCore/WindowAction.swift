@@ -20,6 +20,7 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable, Sendable 
     case undo
     case redo
     case smartArrange
+    case promoteFocused
 
     public var id: String { rawValue }
 
@@ -44,6 +45,7 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable, Sendable 
         case .undo: "Undo"
         case .redo: "Redo"
         case .smartArrange: "Smart Arrange"
+        case .promoteFocused: "Bring to Main"
         }
     }
 
@@ -68,6 +70,7 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable, Sendable 
         case .undo: "Option+Command+Z"
         case .redo: "Option+Shift+Command+Z"
         case .smartArrange: "Control+Option+Command+A"
+        case .promoteFocused: "Control+Option+Command+Return"
         }
     }
 

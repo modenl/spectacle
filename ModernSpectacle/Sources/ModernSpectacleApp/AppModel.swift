@@ -15,20 +15,40 @@ final class AppModel {
     var onChange: (() -> Void)?
     /// Called when the API key is added or removed, so the menu can enable or disable Smart Arrange.
     var onAPIKeyChange: (() -> Void)?
+    /// True while Smart Arrange is waiting for the model; the menu bar icon reflects it.
+    var onBusyChange: ((Bool) -> Void)?
     private let notice = SuggestionPanel()
+    private let hud = ProgressHUD()
 
     let loginItems = LoginItemController()
     private let hotKeys = HotKeyCenter()
     private let windowController = WindowController()
     private let smartArranger: SmartArranger
     private var settings: SettingsWindowController?
+    private var profile: ProfileWindowController?
+    var arranger: SmartArranger { smartArranger }
     private var permissionObserver: NSObjectProtocol?
+    private var triggerObserver: NSObjectProtocol?
 
     init() {
         smartArranger = SmartArranger(windowController: windowController)
         smartArranger.onStatusChange = { [weak self] status in
             self?.arrangeStatus = status.message
             self?.onChange?()
+        }
+        smartArranger.onBusyChange = { [weak self] busy, text in
+            guard let self else { return }
+            let frame = WindowEnumerator.currentDisplays().first { $0.isMain }?.visibleFrame
+                ?? WindowEnumerator.currentDisplays().first?.visibleFrame ?? .zero
+            if busy {
+                hud.show(text, near: frame)
+            } else if text.isEmpty {
+                hud.hide()
+            } else {
+                // Done: show what happened for a moment, then go away.
+                hud.show(text, near: frame, spinning: false, autoHideAfter: 3)
+            }
+            onBusyChange?(busy)
         }
         hotKeys.registerDefaultShortcuts { [weak self] action in
             self?.perform(action)
@@ -40,10 +60,15 @@ final class AppModel {
             Task { @MainActor in self?.refreshPermissions() }
         }
         // A developer hook: `spectacle-cli trigger` posts this so arranging can be exercised without the hotkey.
-        DistributedNotificationCenter.default().addObserver(
+        // The token must be kept, or the observer silently goes away.
+        triggerObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("xyz.alvumo.ModernSpectacle.arrange"), object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.perform(.smartArrange) }
+        ) { [weak self] note in
+            let fresh = note.userInfo?["fresh"] != nil
+            Task { @MainActor in
+                if fresh { self?.smartArranger.invalidateCache() }
+                self?.perform(.smartArrange)
+            }
         }
     }
 
@@ -62,6 +87,10 @@ final class AppModel {
 
     func perform(_ action: WindowAction) {
         guard shortcutsEnabled || action.isHistoryAction else {
+            return
+        }
+        if action == .promoteFocused {
+            smartArranger.promoteFocused()
             return
         }
         if action == .smartArrange {
@@ -152,5 +181,18 @@ final class AppModel {
     func settingsDidClose() {
         settings = nil
         onChange = nil
+    }
+
+    func showProfile() {
+        if profile == nil {
+            profile = ProfileWindowController(model: self)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        profile?.showWindow(nil)
+        profile?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    func profileDidClose() {
+        profile = nil
     }
 }

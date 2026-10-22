@@ -114,11 +114,197 @@ struct SmartLayoutTests {
     }
 
     @Test
-    func planDecodesFromModelJSON() throws {
-        let json = #"{"summary":"ok","notes":"keeps Slack narrow","placements":[{"id":2,"group":"coding","x":0,"y":25,"w":864,"h":875}]}"#
-        let plan = try LayoutPrompt.decodePlan(from: json)
-        #expect(plan.placements == [Placement(id: 2, group: "coding", rect: CGRect(x: 0, y: 25, width: 864, height: 875))])
+    func completedPlanTilesWindowsOnADisplayTheModelIgnored() {
+        let second = DisplayInfo(id: 1, visibleFrame: CGRect(x: 1440, y: 0, width: 1920, height: 1080), isMain: false)
+        var b = window(2, .media, bundle: "b"); b.displayID = 1
+        var c = window(3, .media, bundle: "c"); c.displayID = 1
+        let req = LayoutRequest(displays: [display, second], windows: [window(1, .coding, bundle: "a"), b, c], recentApps: [], corrections: [], notes: "", localTime: "t")
+        let plan = LayoutPlan(summary: "", notes: "", placements: [Placement(id: 1, group: "column1", rect: display.visibleFrame)])
+        let full = PlanValidator.completed(plan, for: req)
+        let added = full.placements.filter { $0.group == "background" }
+        #expect(added.map(\.id) == [2, 3])
+        #expect(added[0].rect.area + added[1].rect.area == second.visibleFrame.area)
+        #expect(!added[0].rect.intersects(added[1].rect))
+    }
+
+    @Test
+    func composerTurnsSharesIntoAnExactTiling() {
+        let req = request([window(1, .coding, bundle: "a", focused: true), window(2, .browser, bundle: "b"), window(3, .chat, bundle: "c"), window(4, .files, bundle: "f")])
+        let design = LayoutDesign(summary: "s", notes: "n", displays: [
+            DisplayDesign(id: 0, columns: [
+                ColumnDesign(share: 3, windows: [WindowSlot(id: 1, share: 1)]),
+                ColumnDesign(share: 2, windows: [WindowSlot(id: 2, share: 2), WindowSlot(id: 3, share: 1)]),
+            ], cascade: [4]),
+        ])
+        let plan = LayoutComposer.plan(from: design, for: req)
+        let a = plan.placements[0].rect, b = plan.placements[1].rect, c = plan.placements[2].rect
+        #expect(a == CGRect(x: 0, y: 25, width: 864, height: 875))
+        #expect(b.minX == 864 && b.maxX == 1440 && b.minY == 25)
+        #expect(c.minX == 864 && c.minY == b.maxY && c.maxY == 900)
+        #expect(a.area + b.area + c.area == display.visibleFrame.area)
+        #expect(abs(b.height - 875 * 2 / 3) < 1)
+        #expect(plan.placements[3].group == "cascade")
+    }
+
+    @Test
+    func composerCascadesOnlyFilesAndFixedSizeWindows() {
+        var calculator = window(4, .other, bundle: "calc")
+        calculator.resizable = false
+        let req = request([window(1, .coding, bundle: "a"), window(2, .coding, bundle: "codex"), window(3, .files, bundle: "f"), calculator, window(5, .other, bundle: "monitor")])
+        let design = LayoutDesign(summary: "", notes: "", displays: [
+            DisplayDesign(id: 0, columns: [ColumnDesign(share: 1, windows: [WindowSlot(id: 1, share: 1)])], cascade: [2, 3, 4]),
+        ])
+        let plan = LayoutComposer.plan(from: design, for: req)
+        let group = { (id: Int) in plan.placements.first { $0.id == id }?.group }
+        #expect(group(2) == "column1") // work window pulled out of the cascade
+        #expect(group(3) == "cascade") // Finder may cascade
+        #expect(group(4) == "cascade") // fixed size keeps its size in the corner
+        #expect(plan.placements.first { $0.id == 4 }?.rect.size == calculator.frame.cgRect.size)
+        #expect(group(5) == "peek") // forgotten by the design: background, so it peeks
+        #expect(plan.placements.count == 5)
+        let column = plan.placements.filter { $0.group == "column1" }
+        #expect(column.map(\.rect.height).reduce(0, +) == display.visibleFrame.height)
+    }
+
+    @Test
+    func composerPeeksBackgroundWindowsBehindTheTiles() {
+        var req = request([window(1, .coding, bundle: "a", focused: true), window(2, .other, bundle: "notes"), window(3, .other, bundle: "monitor"), window(4, .chat, bundle: "slack")])
+        req.focusedWindowID = 1
+        let design = LayoutDesign(summary: "", notes: "", displays: [
+            DisplayDesign(id: 0, columns: [ColumnDesign(share: 1, windows: [WindowSlot(id: 1, share: 1)])], peek: [2, 3, 1], cascade: []),
+        ])
+        let plan = LayoutComposer.plan(from: design, for: req)
+        let tile = plan.placements.first { $0.id == 1 }!
+        let strip = LayoutComposer.peekStripWidth(for: display.visibleFrame)
+        #expect(tile.group == "column1")
+        #expect(tile.rect.maxX == display.visibleFrame.maxX - strip) // tiles leave the strip free
+        let peeks = plan.placements.filter { $0.group == "peek" }
+        #expect(peeks.map(\.id) == [2, 3, 4]) // 4 was forgotten by the design and peeks too; 1 is focused and never peeks
+        for p in peeks {
+            #expect(p.rect.maxX == display.visibleFrame.maxX)
+            #expect(display.visibleFrame.contains(p.rect))
+        }
+        #expect(peeks[0].rect.minY > peeks[1].rect.minY) // the most useful one sits lowest, on top of the others
+    }
+
+    @Test
+    func composerKeepsTheFocusedWindowLargest() {
+        var req = request([window(1, .coding, bundle: "a", focused: true), window(2, .other, bundle: "b"), window(3, .browser, bundle: "c")])
+        req.focusedWindowID = 1
+        // The design makes the focused window the smallest thing on screen.
+        let design = LayoutDesign(summary: "", notes: "", displays: [
+            DisplayDesign(id: 0, columns: [
+                ColumnDesign(share: 1, windows: [WindowSlot(id: 2, share: 3), WindowSlot(id: 1, share: 1)]),
+                ColumnDesign(share: 3, windows: [WindowSlot(id: 3, share: 1)]),
+            ], cascade: []),
+        ])
+        let plan = LayoutComposer.plan(from: design, for: req)
+        let focused = plan.placements.first { $0.id == 1 }!.rect
+        let sameColumn = plan.placements.first { $0.id == 2 }!.rect
+        let otherColumn = plan.placements.first { $0.id == 3 }!.rect
+        #expect(focused.height > sameColumn.height) // tallest in its column
+        #expect(focused.width > otherColumn.width) // its column is the widest
+    }
+
+    @Test
+    func composerDropsWrongDisplayAndDuplicateWindows() {
+        let second = DisplayInfo(id: 1, visibleFrame: CGRect(x: 1440, y: 0, width: 1920, height: 1080), isMain: false)
+        var onSecond = window(2, .browser, bundle: "b")
+        onSecond.displayID = 1
+        let req = LayoutRequest(displays: [display, second], windows: [window(1, .coding, bundle: "a"), onSecond], recentApps: [], corrections: [], notes: "", localTime: "t")
+        let design = LayoutDesign(summary: "", notes: "", displays: [
+            DisplayDesign(id: 0, columns: [ColumnDesign(share: 1, windows: [WindowSlot(id: 1, share: 1), WindowSlot(id: 2, share: 1), WindowSlot(id: 1, share: 1)])], cascade: []),
+        ])
+        let plan = LayoutComposer.plan(from: design, for: req)
+        #expect(plan.placements.map(\.id) == [1])
+        #expect(plan.placements[0].rect == display.visibleFrame)
+    }
+
+    @Test
+    func templatePlanDecodesFromModelJSON() throws {
+        let json = #"{"summary":"ok","notes":"keeps Slack narrow","displays":[{"id":0,"template":"wide-two-main-stack","slots":[{"slot":"main","window":9},{"slot":"second","window":11}],"stack":[1,3],"cascade":[4]}]}"#
+        let plan = try LayoutPrompt.decodeTemplatePlan(from: json)
+        #expect(plan.displays[0].template == "wide-two-main-stack")
+        #expect(plan.displays[0].slots == [TemplateAssignment(slot: "main", window: 9), TemplateAssignment(slot: "second", window: 11)])
+        #expect(plan.displays[0].stack == [1, 3])
         #expect(plan.notes == "keeps Slack narrow")
+    }
+
+    @Test
+    func templateFillsSlotsAndStacksTheRest() {
+        let wide = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 3440, height: 1319), isMain: true)
+        var req = LayoutRequest(displays: [wide], windows: [
+            window(1, .coding, bundle: "claude", focused: true), window(2, .coding, bundle: "codex"),
+            window(3, .other, bundle: "notes"), window(4, .chat, bundle: "slack"), window(5, .files, bundle: "finder"),
+        ], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 1
+        #expect(LayoutTemplates.offers(for: req)[0].options.map(\.id).contains("wide-two-main"))
+
+        // The model puts Codex in main; the focused window must still end up in main. The empty left column collapses.
+        let choice = TemplatePlan(summary: "s", notes: "n", displays: [
+            DisplayChoice(id: 0, template: "wide-two-main", slots: [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "second", window: 1)], stack: [4, 3], cascade: [5]),
+        ])
+        let plan = LayoutComposer.plan(from: LayoutTemplates.design(from: choice, for: req), for: req)
+        let rect = { (id: Int) in plan.placements.first { $0.id == id }!.rect }
+        let group = { (id: Int) in plan.placements.first { $0.id == id }!.group }
+        #expect(rect(1).minX == 0 && group(1) == "column1") // focused took main
+        #expect(rect(2).minX == rect(1).maxX && rect(2).width == rect(1).width) // two equal main columns
+        #expect(rect(1).height == 1319 && rect(2).height == 1319)
+        #expect(abs(rect(2).maxX - 3440 * 0.85) < 2) // main 0.34 + second 0.34 + stack 0.12: the stack strip gets 15%
+        #expect(group(4) == "peek" && group(3) == "peek" && group(5) == "cascade")
+        #expect(rect(4).maxX == 3440 && rect(4).minY > rect(3).minY) // Slack in front, lowest
+    }
+
+    @Test
+    func promotionSwapsFocusedIntoMain() {
+        let choice = DisplayChoice(id: 0, template: "wide-center", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "left-top", window: 2)], stack: [3, 4], cascade: [])
+        let fromSlot = LayoutTemplates.promoted(choice, focusedID: 2)
+        #expect(fromSlot.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "left-top", window: 1)])
+        let fromStack = LayoutTemplates.promoted(choice, focusedID: 4)
+        #expect(fromStack.slots.first { $0.slot == "main" }?.window == 4)
+        #expect(fromStack.stack == [1, 3]) // old main goes to the front of the stack
+        #expect(LayoutTemplates.promoted(choice, focusedID: 1) == choice)
+    }
+
+    @Test
+    func browsersAreNotSqueezedIntoNarrowSlots() {
+        // On a 1440-wide laptop display std-center's side columns are 22% = 317 points: fine for chat, too narrow for a browser.
+        let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 25, width: 1440, height: 875), isMain: true)
+        var req = LayoutRequest(displays: [laptop], windows: [window(1, .coding, bundle: "a", focused: true), window(2, .browser, bundle: "b"), window(3, .chat, bundle: "c")], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 1
+        let template = LayoutTemplates.standard.first { $0.id == "std-center" }!
+        let choice = TemplatePlan(summary: "", notes: "", displays: [
+            DisplayChoice(id: 0, template: template.id, slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "left", window: 2), TemplateAssignment(slot: "right", window: 3)]),
+        ])
+        let design = LayoutTemplates.design(from: choice, for: req)
+        let tiled = design.displays[0].columns.flatMap { $0.windows.map(\.id) }
+        #expect(tiled.contains(1) && tiled.contains(3))
+        #expect(!tiled.contains(2) && design.displays[0].peek == [2]) // the browser went to the stack instead
+    }
+
+    @Test
+    func wideCatalogDefaultsToCenteredMain() {
+        let wide = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 3440, height: 1319), isMain: true)
+        let first = LayoutTemplates.candidates(for: wide)[0]
+        #expect(first.id == "wide-center")
+        let mainColumn = first.columns.firstIndex { $0.slots.contains { $0.id == "main" } }
+        #expect(mainColumn == 1) // flanked on both sides
+        #expect(first.hasStack)
+    }
+
+    @Test
+    func templateCollapsesEmptySlots() {
+        let std = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 25, width: 2560, height: 1415), isMain: true)
+        var req = LayoutRequest(displays: [std], windows: [window(1, .coding, bundle: "a", focused: true), window(2, .browser, bundle: "b")], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 1
+        // std-main-side has main + side-top + side-bottom; only side-top is filled, so the side column has one window.
+        let choice = TemplatePlan(summary: "", notes: "", displays: [
+            DisplayChoice(id: 0, template: "std-main-side", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)]),
+        ])
+        let plan = LayoutComposer.plan(from: LayoutTemplates.design(from: choice, for: req), for: req)
+        #expect(plan.placements.count == 2)
+        #expect(plan.placements[1].rect.height == 1415) // the empty bottom slot collapsed
+        #expect(plan.placements[0].rect.width + plan.placements[1].rect.width == 2560)
     }
 
     @Test

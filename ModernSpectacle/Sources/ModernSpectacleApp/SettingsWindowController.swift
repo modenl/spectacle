@@ -115,7 +115,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let keyRow = NSStackView(views: [secureKeyField, plainKeyField, showKeyToggle, saveKeyButton])
         keyRow.orientation = .horizontal
         stack.addArrangedSubview(keyRow)
-        let keyButtons = NSStackView(views: [testKeyButton, removeKeyButton])
+        let profileButton = NSButton(title: "Layout Profile…", target: self, action: #selector(openProfile))
+        let keyButtons = NSStackView(views: [testKeyButton, removeKeyButton, profileButton])
         keyButtons.orientation = .horizontal
         stack.addArrangedSubview(keyButtons)
         keyCheck.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -197,6 +198,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         secureKeyField.stringValue = ""
         plainKeyField.stringValue = ""
         refresh()
+    }
+
+    @objc private func openProfile() {
+        model.showProfile()
     }
 
     @objc private func testKey() {

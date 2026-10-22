@@ -25,10 +25,33 @@ public enum PlanValidator {
             guard let display = request.displays.first(where: { $0.id == window.displayID }) ?? request.displays.first else {
                 continue
             }
-            let rect = clamp(placement.rect, into: display.visibleFrame)
+            var rect = clamp(placement.rect, into: display.visibleFrame)
+            if !window.resizable {
+                // Keep the window's own size; only its position is ours to change.
+                rect.size = window.frame.cgRect.size
+                rect = clamp(rect, into: display.visibleFrame)
+                rect.size = window.frame.cgRect.size
+            }
             placements.append(Placement(id: placement.id, group: placement.group, rect: rect))
         }
 
+        return LayoutPlan(summary: plan.summary, notes: plan.notes, placements: placements)
+    }
+
+    /// Windows the planner left out (typically a whole display it ignored) are tiled in a grid; fixed-size ones are
+    /// stacked in the corner. Every window ends up handled.
+    public static func completed(_ plan: LayoutPlan, for request: LayoutRequest) -> LayoutPlan {
+        let placed = Set(plan.placements.map(\.id))
+        var placements = plan.placements
+        for display in request.displays {
+            let leftovers = request.windows.filter { $0.displayID == display.id && !placed.contains($0.id) }
+            let tiled = leftovers.filter(\.resizable)
+            let fixed = leftovers.filter { !$0.resizable }
+            let frames = ArrangementAnalyzer.tileFrames(count: tiled.count, in: display.visibleFrame, gap: 0)
+            placements += zip(tiled, frames).map { Placement(id: $0.id, group: "background", rect: $1) }
+            let cascade = ArrangementAnalyzer.cascadeFrames(sizes: fixed.map { $0.frame.cgRect.size }, in: display.visibleFrame)
+            placements += zip(fixed, cascade).map { Placement(id: $0.id, group: "background", rect: $1) }
+        }
         return LayoutPlan(summary: plan.summary, notes: plan.notes, placements: placements)
     }
 

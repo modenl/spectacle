@@ -18,15 +18,21 @@ func run() async {
         print("usage: spectacle-cli snapshot | plan [--heuristic|--sample] | arrange [--heuristic]")
         exit(2)
     }
+    // `trigger` must not touch the keychain: reading an item the app created makes macOS show a permission dialog.
+    if command == "trigger" {
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("xyz.alvumo.ModernSpectacle.arrange"), object: nil,
+            userInfo: args.contains("--fresh") ? ["fresh": "1"] : nil, deliverImmediately: true
+        )
+        print("sent")
+        return
+    }
     let useHeuristic = args.contains("--heuristic") || !KeychainStore.hasAPIKey
     let planner: any LayoutPlanner = useHeuristic ? HeuristicPlanner() : ClaudePlanner()
 
     let request: LayoutRequest
     let snapshot: WindowEnumerator.Snapshot?
-    if command == "trigger" {
-        request = sampleRequest()
-        snapshot = nil
-    } else if args.contains("--sample") {
+    if args.contains("--sample") {
         request = sampleRequest()
         snapshot = nil
     } else {
@@ -44,11 +50,6 @@ func run() async {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
 
     switch command {
-    case "trigger":
-        DistributedNotificationCenter.default().postNotificationName(
-            Notification.Name("xyz.alvumo.ModernSpectacle.arrange"), object: nil, userInfo: nil, deliverImmediately: true
-        )
-        print("sent")
     case "snapshot":
         print(String(decoding: try! encoder.encode(request), as: UTF8.self))
     case "plan", "arrange":

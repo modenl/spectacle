@@ -62,6 +62,10 @@ public struct WindowInfo: Codable, Equatable, Sendable {
     public var isFocused: Bool
     /// Seconds since the owning app was last frontmost; nil when unknown.
     public var appActiveSecondsAgo: Int?
+    /// Seconds since this particular window last had keyboard focus; nil when it has not been focused since we started watching.
+    public var lastFocusedSecondsAgo: Int?
+    /// False for fixed-size windows such as Calculator: they keep their size and only get moved.
+    public var resizable: Bool
 
     public init(
         id: Int,
@@ -72,7 +76,9 @@ public struct WindowInfo: Codable, Equatable, Sendable {
         frame: CGRect,
         displayID: Int,
         isFocused: Bool,
-        appActiveSecondsAgo: Int?
+        appActiveSecondsAgo: Int?,
+        lastFocusedSecondsAgo: Int? = nil,
+        resizable: Bool = true
     ) {
         self.id = id
         self.app = app
@@ -83,6 +89,8 @@ public struct WindowInfo: Codable, Equatable, Sendable {
         self.displayID = displayID
         self.isFocused = isFocused
         self.appActiveSecondsAgo = appActiveSecondsAgo
+        self.lastFocusedSecondsAgo = lastFocusedSecondsAgo
+        self.resizable = resizable
     }
 
     /// Stable identity across snapshots; window element identity is not stable across AX queries.
@@ -106,11 +114,34 @@ public struct LayoutCorrection: Codable, Equatable, Sendable {
     }
 }
 
+/// One stretch of time an app was frontmost. The timeline shows what the person was switching between and for how long.
+public struct FocusEvent: Codable, Equatable, Sendable {
+    public var app: String
+    public var window: String
+    public var secondsAgo: Int
+    public var dwellSeconds: Int
+
+    public init(app: String, window: String, secondsAgo: Int, dwellSeconds: Int) {
+        self.app = app
+        self.window = window
+        self.secondsAgo = secondsAgo
+        self.dwellSeconds = dwellSeconds
+    }
+}
+
 public struct LayoutRequest: Codable, Equatable, Sendable {
     public var displays: [DisplayInfo]
     public var windows: [WindowInfo]
     /// App names, most recently used first.
     public var recentApps: [String]
+    /// The window with keyboard focus right now: where the person's attention is.
+    public var focusedWindowID: Int?
+    /// Most recent app switches first, with how long each stayed in front.
+    public var focusTimeline: [FocusEvent]
+    /// Templates the planner may choose from, per display. Filled in by the arranger.
+    public var templates: [TemplateOffer]
+    /// What was applied last time, with window ids translated to the current snapshot. Keeps layouts stable.
+    public var previous: [DisplayChoice]
     public var corrections: [LayoutCorrection]
     /// Free-form notes the planner keeps about this user across runs.
     public var notes: String
@@ -125,11 +156,19 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
         corrections: [LayoutCorrection],
         notes: String,
         localTime: String,
-        appStyles: [String: ArrangementStyle] = [:]
+        appStyles: [String: ArrangementStyle] = [:],
+        focusedWindowID: Int? = nil,
+        focusTimeline: [FocusEvent] = [],
+        templates: [TemplateOffer] = [],
+        previous: [DisplayChoice] = []
     ) {
         self.displays = displays
         self.windows = windows
         self.recentApps = recentApps
+        self.focusedWindowID = focusedWindowID
+        self.focusTimeline = focusTimeline
+        self.templates = templates
+        self.previous = previous
         self.corrections = corrections
         self.notes = notes
         self.localTime = localTime
@@ -171,10 +210,13 @@ public struct LayoutPlan: Codable, Equatable, Sendable {
     public var summary: String
     public var notes: String
     public var placements: [Placement]
+    /// The template choices behind the placements, when a template planner produced them. Kept for stability.
+    public var choices: [DisplayChoice]?
 
-    public init(summary: String, notes: String, placements: [Placement]) {
+    public init(summary: String, notes: String, placements: [Placement], choices: [DisplayChoice]? = nil) {
         self.summary = summary
         self.notes = notes
         self.placements = placements
+        self.choices = choices
     }
 }

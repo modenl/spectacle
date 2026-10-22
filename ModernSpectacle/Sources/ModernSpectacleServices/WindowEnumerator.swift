@@ -7,11 +7,16 @@ public final class WindowEnumerator {
     public struct Entry {
         public let window: ManagedWindow
         public let info: WindowInfo
+        public let pid: pid_t
     }
 
     public struct Snapshot {
         public let displays: [DisplayInfo]
         public let entries: [Entry]
+        /// Windows seen but not used, with the reason, for debugging: "App: title (reason)".
+        public let rejected: [String]
+        /// One line per regular app: how many AX windows it reported and whether it is hidden.
+        public let apps: [String]
 
         public var windows: [WindowInfo] { entries.map(\.info) }
     }
@@ -32,14 +37,17 @@ public final class WindowEnumerator {
     }
 
     /// `lastActive` maps bundle id to the last time that app was frontmost. `pids` limits the snapshot to those apps.
-    public func snapshot(lastActive: [String: Date], now: Date = Date(), pids: Set<pid_t>? = nil) -> Snapshot {
+    public func snapshot(lastActive: [String: Date], windowFocus: [String: Date] = [:], now: Date = Date(), pids: Set<pid_t>? = nil) -> Snapshot {
         let displays = Self.currentDisplays()
         guard !displays.isEmpty else {
-            return Snapshot(displays: [], entries: [])
+            return Snapshot(displays: [], entries: [], rejected: [], apps: [])
         }
+        var rejected: [String] = []
+        var appLines: [String] = []
 
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let focusedWindow = accessibilityClient.focusedWindow()
         var entries: [Entry] = []
         var nextID = 1
 
@@ -55,13 +63,19 @@ public final class WindowEnumerator {
             let secondsAgo = lastActive[bundleID].map { Int(now.timeIntervalSince($0)) }
             let appIsFrontmost = app.processIdentifier == frontmostPID
 
-            for (index, window) in accessibilityClient.windows(of: app.processIdentifier).enumerated() {
-                guard
-                    window.isStandardWindow,
-                    !window.isMinimized,
-                    let frame = window.frame,
-                    frame.width >= 100, frame.height >= 100
-                else {
+            let axWindows = accessibilityClient.windows(of: app.processIdentifier)
+            appLines.append("\(name): \(axWindows.count) windows\(app.isHidden ? ", hidden" : "")")
+            for window in axWindows {
+                guard window.isStandardWindow else {
+                    rejected.append("\(name): \(window.title.prefix(40)) (\(window.debugDescription))")
+                    continue
+                }
+                guard !window.isMinimized else {
+                    rejected.append("\(name): \(window.title.prefix(40)) (minimized)")
+                    continue
+                }
+                guard let frame = window.frame, frame.width >= 100, frame.height >= 100 else {
+                    rejected.append("\(name): \(window.title.prefix(40)) (no frame or tiny)")
                     continue
                 }
 
@@ -70,23 +84,30 @@ public final class WindowEnumerator {
                     ?? displays.min { distance($0.visibleFrame, to: center) < distance($1.visibleFrame, to: center) }
                     ?? displays[0]
 
+                let title = String(window.title.prefix(80))
                 let info = WindowInfo(
                     id: nextID,
                     app: name,
                     bundleID: bundleID,
                     kind: kind,
-                    title: String(window.title.prefix(80)),
+                    title: title,
                     frame: frame,
                     displayID: display.id,
-                    isFocused: appIsFrontmost && index == 0,
-                    appActiveSecondsAgo: secondsAgo
+                    isFocused: appIsFrontmost && focusedWindow.map { $0 == window } == true,
+                    appActiveSecondsAgo: secondsAgo,
+                    lastFocusedSecondsAgo: windowFocus["\(bundleID)|\(title)"].map { Int(now.timeIntervalSince($0)) },
+                    resizable: window.isResizable
                 )
-                entries.append(Entry(window: window, info: info))
+                entries.append(Entry(window: window, info: info, pid: app.processIdentifier))
                 nextID += 1
             }
         }
 
-        return Snapshot(displays: displays, entries: entries)
+        return Snapshot(displays: displays, entries: entries, rejected: rejected, apps: appLines)
+    }
+
+    public func focusedWindowTitle() -> String {
+        accessibilityClient.focusedWindow()?.title ?? ""
     }
 
     private func category(of app: NSRunningApplication) -> String? {

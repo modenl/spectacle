@@ -105,12 +105,26 @@ public enum ArrangementAnalyzer {
         }
     }
 
+    /// The default stack size; never lets the stack swallow an ultrawide display.
+    public static func cascadeSize(in frame: CGRect) -> CGSize {
+        CGSize(width: min(frame.width * 0.42, 960).rounded(), height: min(frame.height * 0.5, 640).rounded())
+    }
+
     public static func cascadeFrames(count: Int, in frame: CGRect, step: CGFloat = 28) -> [CGRect] {
-        guard count > 0 else { return [] }
-        let size = CGSize(width: (frame.width * 0.42).rounded(), height: (frame.height * 0.5).rounded())
-        return (0..<count).map { index in
+        cascadeFrames(sizes: Array(repeating: cascadeSize(in: frame), count: count), in: frame, step: step)
+    }
+
+    /// Stack anchored at the bottom-right corner, each window keeping its given size (fixed-size windows pass their own).
+    public static func cascadeFrames(sizes: [CGSize], in frame: CGRect, step: CGFloat = 28) -> [CGRect] {
+        sizes.enumerated().map { index, size in
             let offset = CGFloat(index) * step
-            return CGRect(x: frame.maxX - size.width - offset, y: frame.maxY - size.height - offset, width: size.width, height: size.height).integral
+            let width = min(size.width, frame.width)
+            let height = min(size.height, frame.height)
+            return CGRect(
+                x: max(frame.minX, frame.maxX - width - offset),
+                y: max(frame.minY, frame.maxY - height - offset),
+                width: width, height: height
+            ).integral
         }
     }
 

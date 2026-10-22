@@ -39,7 +39,8 @@ public enum DefaultShortcutBindings {
             ShortcutBinding(action: .smaller, keyCode: 123, carbonModifiers: option | control | shift),
             ShortcutBinding(action: .undo, keyCode: 6, carbonModifiers: command | option),
             ShortcutBinding(action: .redo, keyCode: 6, carbonModifiers: command | option | shift),
-            ShortcutBinding(action: .smartArrange, keyCode: 0, carbonModifiers: command | option | control)
+            ShortcutBinding(action: .smartArrange, keyCode: 0, carbonModifiers: command | option | control),
+            ShortcutBinding(action: .promoteFocused, keyCode: 36, carbonModifiers: command | option | control)
         ]
     }
 }
