@@ -146,8 +146,6 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
     public var localTime: String
     /// Per-app arrangement style the user has shown by hand (bundle id -> style).
     public var appStyles: [String: ArrangementStyle]
-    /// Narrowest width each app was seen to accept (bundle id -> points); slots narrower than that are not used for it.
-    public var minimumWidths: [String: Int] = [:]
     /// The UI language ("en" or "zh-Hans"); the model writes its summary in it.
     public var language: String = "en"
 

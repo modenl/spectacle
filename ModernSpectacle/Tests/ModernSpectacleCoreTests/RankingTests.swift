@@ -151,19 +151,6 @@ struct LearnedWidthTests {
     }
 
     @Test
-    func anAppThatWillNotShrinkIsKeptOutOfNarrowSlots() {
-        // Notes refuses to get narrower than 701 points; the laptop's right column is 605.
-        var req = LayoutRequest(displays: [laptop], windows: [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "notes", .other)],
-                                recentApps: [], corrections: [], notes: "", localTime: "t", focusedWindowID: 1)
-        let ranking = WindowRanking(windows: [RankedWindow(id: 1, role: .task, relevance: 3), RankedWindow(id: 2, role: .task, relevance: 2), RankedWindow(id: 3, role: .awareness, relevance: 1)], source: "test")
-        #expect(LayoutTemplates.fill(LayoutTemplates.small[0], on: laptop, ranking: ranking, request: req).slots.contains { $0.window == 3 })
-        req.minimumWidths = ["notes": 701]
-        let choice = LayoutTemplates.fill(LayoutTemplates.small[0], on: laptop, ranking: ranking, request: req)
-        #expect(!choice.slots.contains { $0.window == 3 })
-        #expect(choice.stack == [3])
-    }
-
-    @Test
     func retitledWindowsDoNotInvalidateTheRanking() {
         let before = LayoutRequest(displays: [laptop], windows: [window(1, "iterm", .coding, title: "-zsh")], recentApps: [], corrections: [], notes: "", localTime: "t")
         let after = LayoutRequest(displays: [laptop], windows: [window(1, "iterm", .coding, title: "swift test")], recentApps: [], corrections: [], notes: "", localTime: "t")
@@ -238,5 +225,25 @@ struct StartingTemplateTests {
         #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 4) == 2)
         #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 9) == 2) // the largest
         #expect(LayoutTemplates.startingTemplate(in: standard, remembered: nil, needed: 2) == 1)
+    }
+}
+
+@Suite
+struct MainAndTwoTests {
+    @Test
+    func mainAndTwoOnTheRightPlacesThreeWindows() {
+        let display = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 1920, height: 1092), isMain: true)
+        func window(_ id: Int, _ app: String, _ kind: AppKind, focused: Bool = false) -> WindowInfo {
+            WindowInfo(id: id, app: app, bundleID: app, kind: kind, title: app, frame: CGRect(x: 0, y: 30, width: 1920, height: 1091), displayID: 0, isFocused: focused, appActiveSecondsAgo: nil)
+        }
+        let request = LayoutRequest(displays: [display], windows: [window(6, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "sublime", .coding), window(4, "notes", .other)],
+                                    recentApps: [], corrections: [], notes: "", localTime: "t", focusedWindowID: 6)
+        // The model's actual answer from the bug report.
+        let ranking = WindowRanking(windows: [RankedWindow(id: 6, role: .task, relevance: 4), RankedWindow(id: 2, role: .task, relevance: 3),
+                                              RankedWindow(id: 3, role: .task, relevance: 2), RankedWindow(id: 4, role: .background, relevance: 1)], source: "claude")
+        let choice = LayoutTemplates.fill(LayoutTemplates.standard[0], on: display, ranking: ranking, request: request)
+        #expect(Set(choice.slots.map(\.window)) == [6, 2, 3])
+        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [choice]), for: request)
+        #expect(plan.placements.filter { $0.group.hasPrefix("column") }.count == 3)
     }
 }

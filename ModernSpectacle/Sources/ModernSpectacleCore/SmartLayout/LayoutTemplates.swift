@@ -229,12 +229,6 @@ public enum LayoutTemplates {
         }
     }
 
-    /// The narrowest slot this window is usable in: its kind's readability minimum, or the app's own minimum width
-    /// when it refuses to get narrower than that.
-    public static func readableWidth(of window: WindowInfo, in request: LayoutRequest) -> CGFloat {
-        max(minimumWidth(for: window.kind), CGFloat(request.minimumWidths[window.bundleID] ?? 0))
-    }
-
     // MARK: Reusing a plan
 
     /// Stored window keys ("bundleID|title") to the ids of the windows open now. Exact key first; then any window of the
@@ -311,7 +305,7 @@ public enum LayoutTemplates {
                 let fits = { (slot: TemplateSlot) -> Bool in
                     guard slot.id != "main", let window = windowOf[id] else { return true }
                     let column = template.columns.first { $0.slots.contains { $0.id == slot.id } }!
-                    return display.visibleFrame.width * CGFloat(column.share / total) >= readableWidth(of: window, in: request)
+                    return display.visibleFrame.width * CGFloat(column.share / total) >= minimumWidth(for: window.kind)
                 }
                 if let index = free.firstIndex(where: fits) {
                     slots.append(TemplateAssignment(slot: free.remove(at: index).id, window: id))
@@ -406,7 +400,7 @@ public enum LayoutTemplates {
 
         var slots: [TemplateAssignment] = []
         for slot in template.slotsByNearness {
-            let fits = { (w: WindowInfo) in slot.id == "main" || width(of: slot) >= readableWidth(of: w, in: request) }
+            let fits = { (w: WindowInfo) in slot.id == "main" || width(of: slot) >= minimumWidth(for: w.kind) }
             let role = { (w: WindowInfo) in w.id == request.focusedWindowID ? .task : (roleOf[w.id] ?? .task) }
             let preferred: WindowRole = slot.awareness ? .awareness : .task
             // Main is never left empty while the display has a window: with nothing else, the most relevant one takes it.
@@ -457,7 +451,7 @@ public enum LayoutTemplates {
                 let width = display.visibleFrame.width * CGFloat(column.share / totalShare)
                 for slot in column.slots {
                     guard let id = assigned[slot.id], id != request.focusedWindowID, let window = windowOf[id] else { continue }
-                    if width < readableWidth(of: window, in: request) {
+                    if width < minimumWidth(for: window.kind) {
                         assigned[slot.id] = nil
                         demoted.append(id)
                     }

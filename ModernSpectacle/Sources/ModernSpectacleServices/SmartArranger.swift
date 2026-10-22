@@ -204,11 +204,12 @@ public final class SmartArranger {
         let pointer = CGPoint(x: NSEvent.mouseLocation.x, y: mainHeight - NSEvent.mouseLocation.y)
         let focusedDisplay = request.activeDisplayID(pointer: pointer) ?? 0
         var templateIndex: [Int: Int] = [:]
-        // How many windows want a slot, judged locally (focus and recency) so the template is chosen right away.
+        // How many task windows want a slot, judged locally (focus and recency) so the template is chosen right away.
+        // Awareness windows take an awareness slot when there is one but are no reason to switch template.
         let localRoles = Dictionary(LocalRanker.rank(request).windows.map { ($0.id, $0.role) }, uniquingKeysWith: { a, _ in a })
         for display in request.displays {
             let templates = LayoutTemplates.candidates(for: display)
-            let needed = request.windows.filter { $0.displayID == display.id && $0.resizable && localRoles[$0.id] != .background }.count
+            let needed = request.windows.filter { $0.displayID == display.id && $0.resizable && localRoles[$0.id] == .task }.count
             templateIndex[display.id] = LayoutTemplates.startingTemplate(in: templates, remembered: history.templateChoice[LayoutTemplates.sizeClass(of: display)], needed: needed)
         }
         // The model is called the moment the key goes down; the template is chosen independently while it works.
@@ -450,7 +451,6 @@ public final class SmartArranger {
     private struct Moved: Sendable {
         var job: MoveJob
         var before: CGRect
-        var after: CGRect?
     }
 
     /// Moves the windows: each app's windows in parallel with the other apps' (Accessibility calls are per app, and one
@@ -463,13 +463,12 @@ public final class SmartArranger {
             guard let entry = entriesByID[placement.id] else { return nil }
             return (MoveJob(window: entry.window, pid: entry.pid, target: placement.rect, app: entry.info.app, bundleID: entry.info.bundleID), placement.group == "behind")
         }
-        let displayFrames = snapshot.displays.map(\.visibleFrame)
         Task { @MainActor [weak self] in
             let started = Date()
-            let visible = await Self.moveInParallel(jobs.filter { !$0.hidden }.map(\.job), displays: displayFrames)
+            let visible = await Self.moveInParallel(jobs.filter { !$0.hidden }.map(\.job))
             let visibleMs = Int(Date().timeIntervalSince(started) * 1000)
             whenVisible?()
-            let hidden = await Self.moveInParallel(jobs.filter(\.hidden).map(\.job), displays: displayFrames)
+            let hidden = await Self.moveInParallel(jobs.filter(\.hidden).map(\.job))
             guard let self else { return }
             let moved = visible + hidden
             if !moved.isEmpty {
@@ -484,11 +483,11 @@ public final class SmartArranger {
     }
 
     /// Each app's jobs run in order on their own task; the apps run side by side.
-    private nonisolated static func moveInParallel(_ jobs: [MoveJob], displays: [CGRect]) async -> [Moved] {
+    private nonisolated static func moveInParallel(_ jobs: [MoveJob]) async -> [Moved] {
         let byApp = Dictionary(grouping: jobs, by: \.pid)
         return await withTaskGroup(of: [Moved].self) { group in
             for appJobs in byApp.values {
-                group.addTask { appJobs.compactMap { move($0, displays: displays) } }
+                group.addTask { appJobs.compactMap(move) }
             }
             var all: [Moved] = []
             for await moved in group { all += moved }
@@ -496,11 +495,12 @@ public final class SmartArranger {
         }
     }
 
-    private nonisolated static func move(_ job: MoveJob, displays: [CGRect]) -> Moved? {
+    private nonisolated static func move(_ job: MoveJob) -> Moved? {
         guard let before = job.window.frame, before.integral != job.target.integral else { return nil }
+        // No correction right after: an app that resizes asynchronously still reports its old size here, and moving
+        // it "back inside" would fight its own resize. The settle passes check later.
         job.window.setFrame(job.target)
-        keepInsideDisplay(job.window, planned: job.target, displays: displays)
-        return Moved(job: job, before: before, after: job.window.frame)
+        return Moved(job: job, before: before)
     }
 
     /// Some apps resize asynchronously (Sublime Text) and drop a size change that arrives while the previous one is
@@ -508,60 +508,39 @@ public final class SmartArranger {
     private func settle(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], displays: [DisplayInfo]) {
         settleTask?.cancel()
         settleTask = Task { @MainActor in
-            for pass in 0..<2 {
-                try? await Task.sleep(for: .milliseconds(250))
+            // Asynchronous apps get time: two passes just ask again, the last one accepts a window that will not shrink.
+            let waits = [250, 300, 500]
+            for pass in waits.indices {
+                try? await Task.sleep(for: .milliseconds(waits[pass]))
                 guard !Task.isCancelled else { return }
                 var retried = 0
                 for placement in plan.placements {
                     guard let entry = entriesByID[placement.id], let actual = entry.window.frame else { continue }
                     let window = entry.window
                     var target = placement.rect
-                    // Still bigger than planned after being told again: that is the app's own minimum. Only then is
-                    // it remembered and the window kept inside the display at its own size. (An app that resizes
-                    // asynchronously, like Sublime Text or iTerm, reports its old size for a moment; the first pass
-                    // simply asks again.)
-                    if pass == 1, actual.width > target.width + 2 || actual.height > target.height + 2,
+                    // Still bigger than planned after being told again: the app will not get narrower, so keep the
+                    // window inside the display at its own size. (An app that resizes asynchronously, like Sublime
+                    // Text or iTerm, reports its old size for a moment; the first pass simply asks again.) Nothing is
+                    // learned from this: a size read mid-resize looks the same, and remembering it once would keep the
+                    // app out of every narrow slot.
+                    if pass == waits.count - 1, actual.width > target.width + 2 || actual.height > target.height + 2,
                        let display = displays.first(where: { $0.visibleFrame.contains(CGPoint(x: target.midX, y: target.midY)) })?.visibleFrame {
                         target.size = CGSize(width: max(target.width, actual.width), height: max(target.height, actual.height))
                         target.origin.x = max(display.minX, min(target.minX, display.maxX - target.width))
                         target.origin.y = max(display.minY, min(target.minY, display.maxY - target.height))
-                        learnMinimumWidth(bundleID: entry.info.bundleID, app: entry.info.app, planned: placement.rect, actual: actual)
                     }
-                    let off = abs(actual.minX - target.minX) > 4 || abs(actual.minY - target.minY) > 4
-                        || abs(actual.width - target.width) > 4 || abs(actual.height - target.height) > 4
-                    guard off else { continue }
+                    let moved = abs(actual.minX - target.minX) > 4 || abs(actual.minY - target.minY) > 4
+                    let resized = abs(actual.width - target.width) > 4 || abs(actual.height - target.height) > 4
+                    guard moved || resized else { continue }
                     suppressObservationUntil = Date().addingTimeInterval(2)
-                    window.setFrame(target)
+                    // Correct only the part that is wrong: sending both again can make an app drop one of them again.
+                    if resized && moved { window.setFrame(target) } else if resized { window.setSize(target.size) } else { window.setPosition(target.origin) }
                     retried += 1
                 }
                 if retried == 0 { return }
                 Self.log("settle: set \(retried) window(s) again")
             }
         }
-    }
-
-    /// Remembers how narrow an app's windows can get when one would not shrink to its slot, so the next arrangement
-    /// does not put it where it would overlap its neighbour.
-    private func learnMinimumWidth(bundleID: String, app: String, planned: CGRect, actual: CGRect?) {
-        // No real app refuses to be narrower than 1000 points; a value like that is a resize still in progress.
-        guard let actual, actual.width > planned.width + 2, actual.width <= 1000 else { return }
-        let width = Int(actual.width.rounded())
-        guard width > history.minimumWidths[bundleID] ?? 0 else { return }
-        history.minimumWidths[bundleID] = width
-        saveHistory()
-        Self.log("learned: \(app) is at least \(width) wide")
-    }
-
-    /// Some apps will not get narrower (or shorter) than their own minimum (Notes, Activity Monitor). Placed at the
-    /// planned origin they would stick out past the display edge, so move such a window back inside.
-    private nonisolated static func keepInsideDisplay(_ window: ManagedWindow, planned: CGRect, displays: [CGRect]) {
-        guard let actual = window.frame, actual.width > planned.width + 2 || actual.height > planned.height + 2,
-              let display = displays.first(where: { $0.contains(CGPoint(x: planned.midX, y: planned.midY)) })
-        else { return }
-        var fixed = actual
-        if fixed.maxX > display.maxX { fixed.origin.x = max(display.minX, display.maxX - fixed.width) }
-        if fixed.maxY > display.maxY { fixed.origin.y = max(display.minY, display.maxY - fixed.height) }
-        if fixed.origin != actual.origin { window.setFrame(fixed) }
     }
 
     /// Peeking windows must sit behind the tiles, and the focused window on top. Window order follows raising, one
@@ -839,7 +818,7 @@ public final class SmartArranger {
             guard let display = request.displays.first else { return }
             let templates = LayoutTemplates.candidates(for: display)
             let ranking = cachedOrLocalRanking(for: request)
-            let needed = ranking.windows.filter { $0.role != .background }.count
+            let needed = ranking.windows.filter { $0.role == .task }.count
             let index = LayoutTemplates.startingTemplate(in: templates, remembered: history.templateChoice[LayoutTemplates.sizeClass(of: display)], needed: needed)
             // Laid out as the windows are now: every block flies from where its window is.
             let filled = LayoutTemplates.fill(templates[index], on: display, ranking: ranking, request: request)
@@ -992,7 +971,6 @@ public final class SmartArranger {
             focusedWindowID: snapshot.windows.first { $0.isFocused }?.id,
             focusTimeline: timelineEvents(now: now)
         )
-        request.minimumWidths = history.minimumWidths
         request.language = Localization.isChinese ? "zh-Hans" : "en"
         request.previous = previousChoices(for: request.windows)
         return request

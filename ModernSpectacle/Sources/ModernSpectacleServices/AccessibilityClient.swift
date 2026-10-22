@@ -110,15 +110,39 @@ public struct ManagedWindow: Equatable, @unchecked Sendable {
             return
         }
 
-        // Two calls, in the order that never pushes the window past a screen edge mid-way (macOS would clamp it):
-        // shrinking resizes first, growing moves first. A size an app drops is set again by the post-arrange check.
-        if let current = self.frame, frame.width <= current.width, frame.height <= current.height {
+        withoutEnhancedInterface {
+            // Some apps clamp size during movement, so size is applied before and after position.
             AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
-            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, position)
-        } else {
             AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, position)
             AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
         }
+    }
+
+    /// Only the size, or only the position: for correcting the one part an app did not take.
+    public func setSize(_ size: CGSize) {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return }
+        withoutEnhancedInterface { AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value) }
+    }
+
+    public func setPosition(_ origin: CGPoint) {
+        var origin = origin
+        guard let value = AXValueCreate(.cgPoint, &origin) else { return }
+        withoutEnhancedInterface { AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value) }
+    }
+
+    /// An app with AXEnhancedUserInterface on (set by VoiceOver or another assistive app) animates every frame change
+    /// and drops the changes that arrive meanwhile: a move followed by a resize ends up as just one of the two. Turn it
+    /// off for the move and back on afterwards, as Rectangle does.
+    private func withoutEnhancedInterface(_ body: () -> Void) {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return body() }
+        let app = AXUIElementCreateApplication(pid)
+        var raw: CFTypeRef?
+        let enhanced = AXUIElementCopyAttributeValue(app, "AXEnhancedUserInterface" as CFString, &raw) == .success && (raw as? Bool) == true
+        if enhanced { AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanFalse) }
+        body()
+        if enhanced { AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) }
     }
 
     /// Brings this window in front of its app's other windows; the app itself still has to be activated.
@@ -201,8 +225,9 @@ public final class AccessibilityClient {
         if !first.isEmpty || !Self.hasOnScreenWindows(pid) {
             return (first, error == .success ? "" : "ax error \(error.rawValue)")
         }
+        // AXManualAccessibility only: AXEnhancedUserInterface would also expose the windows, but makes the app animate
+        // frame changes and drop the ones that overlap.
         AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         AXUIElementSetMessagingTimeout(appElement, 1.0)
         let (second, retryError) = copyWindows(appElement)
         return (second, "retried after enabling accessibility (first: ax \(error.rawValue), retry: ax \(retryError.rawValue))")
