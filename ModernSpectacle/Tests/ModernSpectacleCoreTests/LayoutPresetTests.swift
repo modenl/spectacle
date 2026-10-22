@@ -27,9 +27,9 @@ struct LayoutPresetTests {
             window(1, "code", "spectacle"), window(2, "term", "zsh"), window(3, "claude", "Claude"),
             window(4, "slack", "general", .chat), window(5, "mail", "Inbox", .chat),
         ])
-        let choice = DisplayChoice(id: 1, template: "wide-center", slots: [
-            TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "left-top", window: 2),
-            TemplateAssignment(slot: "left-bottom", window: 3), TemplateAssignment(slot: "right-top", window: 4),
+        let choice = DisplayChoice(id: 1, template: "wide-1-1-n", slots: [
+            TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "left", window: 2),
+            TemplateAssignment(slot: "right-1", window: 3), TemplateAssignment(slot: "right-2", window: 4),
         ], stack: [5])
         return LayoutPresets.make(name: "Coding", from: [choice], request: req)!
     }
@@ -44,16 +44,16 @@ struct LayoutPresetTests {
             window(13, "mail", "Inbox", .chat), window(14, "claude", "Claude"), window(15, "term", "zsh"),
         ])
         let (choices, moved) = LayoutPresets.restore(preset, for: now)
-        #expect(choices.count == 1 && choices[0].template == "wide-center")
+        #expect(choices.count == 1 && choices[0].template == "wide-1-1-n")
         let slotOf = Dictionary(uniqueKeysWithValues: choices[0].slots.map { ($0.window, $0.slot) })
-        #expect(slotOf == [12: "main", 15: "left-top", 14: "left-bottom", 11: "right-top"])
+        #expect(slotOf == [12: "main", 15: "left", 14: "right-1", 11: "right-2"])
         #expect(choices[0].stack == [13])
         #expect(moved.focusedWindowID == nil)
 
         let plan = LayoutComposer.plan(from: LayoutTemplates.design(from: TemplatePlan(summary: "", notes: "", displays: choices), for: moved), for: moved)
         let main = plan.placements.first { $0.id == 12 }!.rect
         #expect(main.minX > 0 && main.maxX < 3440) // centered, not taken over by the focused Slack window
-        #expect(plan.placements.first { $0.id == 13 }?.group == "peek")
+        #expect(plan.placements.first { $0.id == 13 }?.group == "behind")
     }
 
     @Test
@@ -65,14 +65,14 @@ struct LayoutPresetTests {
         let (choices, moved) = LayoutPresets.restore(codingPreset, for: now)
         let slots = choices[0].slots
         #expect(slots.first { $0.slot == "main" }?.window == 22) // most recently focused Code window wins
-        #expect(slots.first { $0.slot == "left-top" }?.window == 23)
-        #expect(!slots.contains { $0.slot == "left-bottom" || $0.slot == "right-top" }) // Claude and Slack are not open
+        #expect(slots.first { $0.slot == "left" }?.window == 23)
+        #expect(!slots.contains { $0.slot == "right-1" || $0.slot == "right-2" }) // Claude and Slack are not open
         #expect(choices[0].stack.isEmpty)
 
-        // Windows the preset does not mention (the other Code window, Safari) end up stacked, not tiled.
+        // Windows the preset does not mention (the other Code window, Safari) wait behind, not tiled.
         let plan = LayoutComposer.plan(from: LayoutTemplates.design(from: TemplatePlan(summary: "", notes: "", displays: choices), for: moved), for: moved)
-        #expect(plan.placements.first { $0.id == 21 }?.group == "peek")
-        #expect(plan.placements.first { $0.id == 24 }?.group == "peek")
+        #expect(plan.placements.first { $0.id == 21 }?.group == "behind")
+        #expect(plan.placements.first { $0.id == 24 }?.group == "behind")
     }
 
     @Test
@@ -80,7 +80,7 @@ struct LayoutPresetTests {
         let both = [wide, laptop]
         let saved = request([window(1, "code", "spectacle"), window(2, "slack", "general", .chat, display: 2)], displays: both)
         let preset = LayoutPresets.make(name: "Two screens", from: [
-            DisplayChoice(id: 1, template: "wide-monocle", slots: [TemplateAssignment(slot: "main", window: 1)]),
+            DisplayChoice(id: 1, template: "wide-1-1-n", slots: [TemplateAssignment(slot: "main", window: 1)]),
             DisplayChoice(id: 2, template: "small-monocle", slots: [TemplateAssignment(slot: "main", window: 2)]),
         ], request: saved)!
 
@@ -191,7 +191,7 @@ struct PlanReuseTests {
     func cachedChoiceFollowsTheCurrentFocus() {
         // Planned while Claude had focus; applied after the user switched to Sublime, and window ids changed.
         let then = [window(1, "claude", .coding, focused: true), window(2, "term", .coding), window(3, "sublime", .coding)]
-        let choice = [DisplayChoice(id: 0, template: "std-main-side-stack", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)], stack: [3])]
+        let choice = [DisplayChoice(id: 0, template: "std-main-2", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)], stack: [3])]
         let now = request([window(7, "sublime", .coding, focused: true), window(8, "claude", .coding), window(9, "term", .coding)])
 
         let translated = LayoutTemplates.translate(choice, from: then, to: now.windows)
@@ -203,21 +203,24 @@ struct PlanReuseTests {
     }
 
     @Test
-    func terminalsFitAStandardSideColumnButBrowsersGoToTheStack() {
-        let req = request([window(1, "claude", .coding, focused: true), window(2, "chrome", .browser), window(3, "term", .coding), window(4, "notes", .other)])
+    func terminalsFitALaptopSideColumnButBrowsersWaitBehind() {
+        let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 33, width: 1512, height: 871), isMain: true)
+        var req = LayoutRequest(displays: [laptop], windows: [window(1, "claude", .coding, focused: true), window(2, "chrome", .browser), window(3, "term", .coding), window(4, "notes", .other)], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 1
         let choice = TemplatePlan(summary: "", notes: "", displays: [
-            DisplayChoice(id: 0, template: "std-main-side-stack", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2), TemplateAssignment(slot: "side-bottom", window: 3)], stack: [4]),
+            DisplayChoice(id: 0, template: "small-main-2", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2), TemplateAssignment(slot: "side-bottom", window: 3)], stack: [4]),
         ])
         let design = LayoutTemplates.design(from: choice, for: req)
         let tiled = design.displays[0].columns.flatMap { $0.windows.map(\.id) }
-        #expect(tiled == [1, 3]) // the 576-point side column keeps the terminal
-        #expect(design.displays[0].peek == [4, 2]) // the plan's stack first, the browser that did not fit after it
+        #expect(tiled == [1, 3]) // the 605-point side column keeps the terminal
+        #expect(design.displays[0].peek == [4, 2]) // the plan's background first, the browser that did not fit after it
+        #expect(design.displays[0].hideBackground)
     }
 
     @Test
     func validatedPlansKeepTheirChoicesForSavingAndPromotion() {
         let req = request([window(1, "a", .coding, focused: true)])
-        let choices = [DisplayChoice(id: 0, template: "std-monocle", slots: [TemplateAssignment(slot: "main", window: 1)])]
+        let choices = [DisplayChoice(id: 0, template: "std-2col", slots: [TemplateAssignment(slot: "main", window: 1)])]
         let plan = LayoutPlan(summary: "", notes: "", placements: [Placement(id: 1, group: "column1", rect: display.visibleFrame)], choices: choices)
         #expect(PlanValidator.sanitized(plan, for: req).choices == choices)
         #expect(PlanValidator.completed(plan, for: req).choices == choices)
@@ -233,7 +236,7 @@ struct LaptopLayoutTests {
     }
 
     @Test
-    func laptopTemplatesHaveAtMostTwoRegionsAndNoStrip() {
+    func laptopTemplatesHaveAtMostTwoColumnsAndNoStrip() {
         for template in LayoutTemplates.small {
             #expect(!template.hasStack)
             #expect(template.columns.count <= 2)
@@ -253,7 +256,7 @@ struct LaptopLayoutTests {
         ])
         let plan = LayoutTemplates.plan(from: choice, for: req)
         let rect = { (id: Int) in plan.placements.first { $0.id == id }!.rect }
-        // Two tiles share the whole width: no strip squeezes them, so Chrome keeps its readable 680 points.
+        // Two tiles share the whole width: nothing squeezes them, so Chrome keeps its readable 680 points.
         #expect(rect(7).minX == 0 && rect(6).maxX == 1512)
         #expect(rect(6).width >= LayoutTemplates.minimumWidth(for: .browser))
         // Everything else is exactly behind the tiles: nothing sticks out.
@@ -261,18 +264,6 @@ struct LaptopLayoutTests {
             #expect(plan.placements.first { $0.id == id }?.group == "behind")
             #expect(rect(id) == laptop.visibleFrame)
         }
-    }
-
-    @Test
-    func wideStackStillPeeks() {
-        let wide = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 3440, height: 1319), isMain: true)
-        var req = LayoutRequest(displays: [wide], windows: [window(1, "a", .coding, focused: true), window(2, "b", .chat)], recentApps: [], corrections: [], notes: "", localTime: "t")
-        req.windows = req.windows.map { var w = $0; w.displayID = 0; return w }
-        req.focusedWindowID = 1
-        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [
-            DisplayChoice(id: 0, template: "wide-center", slots: [TemplateAssignment(slot: "main", window: 1)], stack: [2]),
-        ]), for: req)
-        #expect(plan.placements.first { $0.id == 2 }?.group == "peek")
     }
 }
 
@@ -287,14 +278,14 @@ struct PromotionMatchingTests {
     @Test
     func aTerminalWhoseTitleChangedIsStillTheSideWindow() {
         // Arranged with iTerm titled "-zsh"; by the time Bring to Main is pressed it is running a command.
-        let stored = [(display: 0, template: "small-main-side", slots: [(slot: "main", key: "claude|Claude"), (slot: "side", key: "iterm|-zsh")], stack: ["chrome|Docs"], cascade: [String]())]
+        let stored = [(display: 0, template: "small-main-2", slots: [(slot: "main", key: "claude|Claude"), (slot: "side-top", key: "iterm|-zsh")], stack: ["chrome|Docs"], cascade: [String]())]
         let now = [window(1, "claude", "Claude", .coding), window(2, "iterm", "swift test — ModernSpectacle", .coding, focused: true), window(3, "chrome", "Docs", .browser)]
         let previous = LayoutTemplates.choices(fromKeys: stored, in: now)
-        #expect(previous[0].slots == [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side", window: 2)])
+        #expect(previous[0].slots == [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)])
 
         // So promoting it is a swap: Claude goes to the side, not to the background.
         let promoted = LayoutTemplates.promoted(previous[0], focusedID: 2)
-        #expect(promoted.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "side", window: 1)])
+        #expect(promoted.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "side-top", window: 1)])
         #expect(promoted.stack == [3])
     }
 
@@ -309,10 +300,10 @@ struct PromotionMatchingTests {
 
     @Test
     func aBrowserSwappedToTheSideGetsTheWiderTwoColumnLayout() {
-        // Chrome was main, iTerm on the narrow side; bringing iTerm to main puts Chrome on a 529-point side: too narrow.
+        // Chrome was main, iTerm top right; bringing iTerm to main puts Chrome in a 605-point column: too narrow.
         var req = LayoutRequest(displays: [laptop], windows: [window(1, "chrome", "Docs", .browser), window(2, "iterm", "zsh", .coding, focused: true)], recentApps: [], corrections: [], notes: "", localTime: "t")
         req.focusedWindowID = 2
-        let previous = DisplayChoice(id: 0, template: "small-main-side", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side", window: 2)])
+        let previous = DisplayChoice(id: 0, template: "small-main-2", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)])
         let fitted = LayoutTemplates.fitted(LayoutTemplates.promoted(previous, focusedID: 2), for: req)
         #expect(fitted.template == "small-2col")
         #expect(fitted.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "second", window: 1)])
@@ -320,7 +311,7 @@ struct PromotionMatchingTests {
         #expect(plan.placements.first { $0.id == 1 }?.group == "column2") // Chrome stays visible
 
         // A terminal on the side fits as it is: no template change.
-        let fine = DisplayChoice(id: 0, template: "small-main-side", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side", window: 2)])
+        let fine = DisplayChoice(id: 0, template: "small-main-2", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)])
         #expect(LayoutTemplates.fitted(fine, for: req) == fine)
     }
 }

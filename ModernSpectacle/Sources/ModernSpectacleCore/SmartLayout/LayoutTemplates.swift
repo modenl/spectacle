@@ -6,10 +6,13 @@ import Foundation
 public struct TemplateSlot: Codable, Equatable, Sendable {
     public var id: String
     public var share: Double
+    /// A place for windows to keep an eye on (chat, mail, monitors) rather than work in: filled with those first.
+    public var awareness: Bool
 
-    public init(_ id: String, share: Double = 1) {
+    public init(_ id: String, share: Double = 1, awareness: Bool = false) {
         self.id = id
         self.share = share
+        self.awareness = awareness
     }
 }
 
@@ -40,22 +43,32 @@ public struct LayoutTemplate: Codable, Equatable, Sendable {
 
     public var slotIDs: [String] { columns.flatMap { $0.slots.map(\.id) } }
     public var hasStack: Bool { columns.contains(where: \.isStack) }
-}
 
-/// What the model sees per display: the templates it may pick from.
-public struct TemplateOffer: Codable, Equatable, Sendable {
-    public struct Option: Codable, Equatable, Sendable {
-        public var id: String
-        public var description: String
-        public var slots: [String]
-        public var hasStack: Bool
+    /// Short name for the HUD while cycling templates.
+    public var title: String {
+        switch id {
+        case "wide-1-1-n": L("Left · Main · Right column", "左1 · 中1 · 右n")
+        case "wide-1-2-n": L("Left · Two main · Right column", "左1 · 中2 · 右n")
+        case "wide-grid-6", "std-grid-4": L("Grid", "平铺")
+        case "std-main-2", "small-main-2": L("Main · Two on the right", "左主 · 右上下")
+        case "std-2col", "small-2col": L("Two columns", "左右两栏")
+        case "small-monocle": L("One window", "单窗口")
+        default: id
+        }
     }
 
-    public var displayID: Int
-    public var options: [Option]
+    /// Slots in the order they are filled: main, then by distance from main's column (left first on a tie), top to
+    /// bottom. The most relevant windows end up closest to where the eyes rest.
+    public var slotsByNearness: [TemplateSlot] {
+        let mainColumn = columns.firstIndex { $0.slots.contains { $0.id == "main" } } ?? 0
+        return columns.indices
+            .filter { !columns[$0].isStack }
+            .sorted { (abs($0 - mainColumn), $0) < (abs($1 - mainColumn), $1) }
+            .flatMap { index in columns[index].slots.filter { $0.id == "main" } + columns[index].slots.filter { $0.id != "main" } }
+    }
 }
 
-/// What the model returns per display.
+/// Which window sits in which slot of a template.
 public struct TemplateAssignment: Codable, Equatable, Sendable {
     public var slot: String
     public var window: Int
@@ -112,45 +125,52 @@ public enum LayoutTemplates {
     private static func column(_ share: Double, _ slots: [TemplateSlot]) -> TemplateColumn { TemplateColumn(share: share, slots: slots) }
     private static func single(_ share: Double, _ id: String) -> TemplateColumn { TemplateColumn(share: share, slots: [TemplateSlot(id)]) }
 
-    /// Ultrawide and 4K displays (3000 points and wider). The eyes rest at the center, so the focal window lives there;
-    /// relevance falls off with distance, and the far right edge is a stack for everything else (Bi & Balakrishnan 2009).
+    // Three templates per display size, cycled by pressing M again while ⌃⌥⌘ are held. None has a stack strip:
+    // windows that get no slot wait fully hidden behind the tiles. A right-hand column of awareness slots takes over
+    // the strip's job of keeping chat, mail and monitors in view, readable instead of as slivers.
+
+    /// Ultrawide and 4K displays (3000 points and wider). Main in the center, where the eyes rest
+    /// (Bi & Balakrishnan 2009); the right column holds up to three awareness windows.
     public static let wide: [LayoutTemplate] = [
-        LayoutTemplate(id: "wide-center", description: "Main window in the center; two rows on each side for what the task needs (left) and for awareness apps (right); everything else stacked at the right edge",
-                       columns: [column(0.24, [TemplateSlot("left-top"), TemplateSlot("left-bottom")]), single(0.44, "main"), column(0.22, [TemplateSlot("right-top"), TemplateSlot("right-bottom")]), stack(0.10)]),
-        LayoutTemplate(id: "wide-two-main", description: "Two main windows side by side in the middle (main, second), a two-row column on the left, the rest stacked at the right edge",
-                       columns: [column(0.2, [TemplateSlot("left-top"), TemplateSlot("left-bottom")]), single(0.34, "main"), single(0.34, "second"), stack(0.12)]),
-        LayoutTemplate(id: "wide-main-left", description: "Classic master/stack: large main window on the left, a two-row column beside it, the rest stacked at the right edge",
-                       columns: [single(0.5, "main"), column(0.28, [TemplateSlot("side-top"), TemplateSlot("side-bottom")]), stack(0.22)]),
-        LayoutTemplate(id: "wide-3col", description: "Three equal columns with main in the middle, no stack",
-                       columns: [single(1, "left"), single(1, "main"), single(1, "right")]),
-        LayoutTemplate(id: "wide-monocle", description: "One big centered-feeling main window, the rest stacked at the right edge",
-                       columns: [single(0.8, "main"), stack(0.2)]),
+        LayoutTemplate(id: "wide-1-1-n", description: "Left, main in the center, a right column of up to three",
+                       columns: [single(0.22, "left"), single(0.48, "main"), awarenessColumn(0.30)]),
+        LayoutTemplate(id: "wide-1-2-n", description: "Left, two main windows side by side, a right column of up to three",
+                       columns: [single(0.2, "left"), single(0.3, "main"), single(0.3, "second"), awarenessColumn(0.2)]),
+        LayoutTemplate(id: "wide-grid-6", description: "Six windows in a 3 × 2 grid",
+                       columns: [column(1, [TemplateSlot("main"), TemplateSlot("grid-4")]), column(1, [TemplateSlot("grid-2"), TemplateSlot("grid-5")]), column(1, [TemplateSlot("grid-3"), TemplateSlot("grid-6")])]),
     ]
 
-    /// Ordinary desktop displays (1600 to 3000 points): master/stack layouts.
+    /// Ordinary desktop displays (1600 to 3000 points). Three columns would leave each too narrow for a browser.
     public static let standard: [LayoutTemplate] = [
-        LayoutTemplate(id: "std-main-side", description: "Main window on the left (60%), two rows on the right for what the task needs",
-                       columns: [single(0.6, "main"), column(0.4, [TemplateSlot("side-top"), TemplateSlot("side-bottom")])]),
-        LayoutTemplate(id: "std-main-side-stack", description: "Main window, a side column with two rows, and a stack at the right edge",
-                       columns: [single(0.5, "main"), column(0.3, [TemplateSlot("side-top"), TemplateSlot("side-bottom")]), stack(0.2)]),
-        LayoutTemplate(id: "std-center", description: "Main window in the center with one window on each side",
-                       columns: [single(0.22, "left"), single(0.56, "main"), single(0.22, "right")]),
+        LayoutTemplate(id: "std-main-2", description: "Main on the left (60%), two windows stacked on the right",
+                       columns: [single(0.6, "main"), column(0.4, [TemplateSlot("side-top"), TemplateSlot("side-bottom", awareness: true)])]),
         LayoutTemplate(id: "std-2col", description: "Two equal columns",
-                       columns: [single(1, "main"), single(1, "second")]),
-        LayoutTemplate(id: "std-monocle", description: "One window fills the display, the rest stacked at the right edge",
-                       columns: [single(0.8, "main"), stack(0.2)]),
+                       columns: [single(0.5, "main"), single(0.5, "second")]),
+        LayoutTemplate(id: "std-grid-4", description: "Four windows in a 2 × 2 grid",
+                       columns: [column(1, [TemplateSlot("main"), TemplateSlot("grid-3")]), column(1, [TemplateSlot("grid-2"), TemplateSlot("grid-4")])]),
     ]
 
-    /// Laptop displays (under 1600 points): at most two regions and no stack strip. A strip on a laptop leaves the
-    /// tiles too narrow and shows only unreadable slivers; background windows wait fully hidden behind the tiles.
+    /// Laptop displays (under 1600 points): at most a main window and a right column of two.
     public static let small: [LayoutTemplate] = [
-        LayoutTemplate(id: "small-monocle", description: "The main window fills the display; everything else waits hidden behind it",
-                       columns: [single(1, "main")]),
-        LayoutTemplate(id: "small-2col", description: "Two columns, main on the left (55%), a second window on the right; everything else hidden behind",
+        LayoutTemplate(id: "small-main-2", description: "Main on the left (60%), two windows stacked on the right",
+                       columns: [single(0.6, "main"), column(0.4, [TemplateSlot("side-top"), TemplateSlot("side-bottom", awareness: true)])]),
+        LayoutTemplate(id: "small-2col", description: "Two columns, main on the left (55%)",
                        columns: [single(0.55, "main"), single(0.45, "second")]),
-        LayoutTemplate(id: "small-main-side", description: "Main window (65%) with a narrow companion on the right such as chat or a terminal; everything else hidden behind",
-                       columns: [single(0.65, "main"), single(0.35, "side")]),
+        LayoutTemplate(id: "small-monocle", description: "The main window fills the display",
+                       columns: [single(1, "main")]),
     ]
+
+    private static func awarenessColumn(_ share: Double) -> TemplateColumn {
+        TemplateColumn(share: share, slots: (1...3).map { TemplateSlot("right-\($0)", awareness: true) })
+    }
+
+    /// "wide", "standard" or "small": the key under which the last template used on such a display is remembered.
+    public static func sizeClass(of display: DisplayInfo) -> String {
+        let width = display.visibleFrame.width
+        if width >= 3000 { return "wide" }
+        if width >= 1600 { return "standard" }
+        return "small"
+    }
 
     public static func candidates(for display: DisplayInfo) -> [LayoutTemplate] {
         let width = display.visibleFrame.width
@@ -161,14 +181,6 @@ public enum LayoutTemplates {
 
     public static func template(id: String) -> LayoutTemplate? {
         (wide + standard + small).first { $0.id == id }
-    }
-
-    public static func offers(for request: LayoutRequest) -> [TemplateOffer] {
-        request.displays.map { display in
-            TemplateOffer(displayID: display.id, options: candidates(for: display).map {
-                TemplateOffer.Option(id: $0.id, description: $0.description, slots: $0.slotIDs, hasStack: $0.hasStack)
-            })
-        }
     }
 
     // MARK: Readability
@@ -182,6 +194,12 @@ public enum LayoutTemplates {
         case .coding: 520
         case .chat, .files, .other, .media: 300
         }
+    }
+
+    /// The narrowest slot this window is usable in: its kind's readability minimum, or the app's own minimum width
+    /// when it refuses to get narrower than that.
+    public static func readableWidth(of window: WindowInfo, in request: LayoutRequest) -> CGFloat {
+        max(minimumWidth(for: window.kind), CGFloat(request.minimumWidths[window.bundleID] ?? 0))
     }
 
     // MARK: Reusing a plan
@@ -240,42 +258,53 @@ public enum LayoutTemplates {
         return LayoutTemplates.choices(fromKeys: stored, in: new)
     }
 
-    /// When a window does not fit the slot it is in (a browser swapped next to main on a laptop), switch to a sibling
-    /// template of the same shape whose slots are wide enough, instead of letting it fall into the background.
-    /// Slots map by position. Keeps the choice as it is when it fits, or when no sibling does better.
+    /// When a window does not fit the slot it is in (a browser swapped next to main on a laptop), switch to another
+    /// template for this display where more of the important windows stay visible, instead of letting it fall into the
+    /// background. Windows keep their order of importance: main, then by nearness. Keeps the choice when nothing does better.
     public static func fitted(_ choice: DisplayChoice, for request: LayoutRequest) -> DisplayChoice {
         guard let display = request.displays.first(where: { $0.id == choice.id }),
               let current = template(id: choice.template) else { return choice }
-        let kindOf = Dictionary(request.windows.map { ($0.id, $0.kind) }, uniquingKeysWith: { a, _ in a })
-        func shape(_ t: LayoutTemplate) -> [Int] { t.columns.filter { !$0.isStack }.map(\.slots.count) }
-        func misfits(_ t: LayoutTemplate, _ slots: [TemplateAssignment]) -> Int {
-            let total = t.columns.map(\.share).reduce(0, +)
-            var count = 0
-            for column in t.columns where !column.isStack {
-                let width = display.visibleFrame.width * CGFloat(column.share / total)
-                for slot in column.slots {
-                    guard let id = slots.first(where: { $0.slot == slot.id })?.window, let kind = kindOf[id] else { continue }
-                    if width < minimumWidth(for: kind) { count += 1 }
+        let windowOf = Dictionary(request.windows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let order = current.slotsByNearness.compactMap { slot in choice.slots.first { $0.slot == slot.id }?.window }
+
+        /// Lower is better: each window that ends up hidden costs more the more important it is.
+        func placed(in template: LayoutTemplate) -> (DisplayChoice, Int) {
+            let total = template.columns.map(\.share).reduce(0, +)
+            var free = template.slotsByNearness
+            var slots: [TemplateAssignment] = []
+            var hidden: [Int] = []
+            var cost = 0
+            for (position, id) in order.enumerated() {
+                let fits = { (slot: TemplateSlot) -> Bool in
+                    guard slot.id != "main", let window = windowOf[id] else { return true }
+                    let column = template.columns.first { $0.slots.contains { $0.id == slot.id } }!
+                    return display.visibleFrame.width * CGFloat(column.share / total) >= readableWidth(of: window, in: request)
+                }
+                if let index = free.firstIndex(where: fits) {
+                    slots.append(TemplateAssignment(slot: free.remove(at: index).id, window: id))
+                } else {
+                    hidden.append(id)
+                    cost += order.count - position
                 }
             }
-            return count
+            var result = choice
+            result.template = template.id
+            result.slots = slots
+            result.stack = hidden + choice.stack
+            return (result, cost)
         }
-        let original = misfits(current, choice.slots)
-        guard original > 0 else { return choice }
-        var best = (choice, original)
-        for sibling in candidates(for: display) where sibling.id != current.id && shape(sibling) == shape(current) && sibling.hasStack == current.hasStack {
-            let rename = Dictionary(uniqueKeysWithValues: zip(current.slotIDs, sibling.slotIDs))
-            var candidate = choice
-            candidate.template = sibling.id
-            candidate.slots = choice.slots.compactMap { a in rename[a.slot].map { TemplateAssignment(slot: $0, window: a.window) } }
-            let score = misfits(sibling, candidate.slots)
-            if score < best.1 { best = (candidate, score) }
+
+        let (kept, keptCost) = placed(in: current)
+        guard keptCost > 0 else { return choice }
+        var best = (kept, keptCost)
+        for other in candidates(for: display) where other.id != current.id {
+            let (candidate, cost) = placed(in: other)
+            if cost < best.1 { best = (candidate, cost) }
         }
-        return best.0
+        return best.1 < keptCost ? best.0 : choice
     }
 
-    /// The whole local pipeline from the model's choice to frames, using the request's current focus. Run at apply time,
-    /// so a plan computed earlier (pre-warmed while another window had focus) still puts the focused window in main.
+    /// The whole local pipeline from a choice to frames, using the request's current focus.
     public static func plan(from choice: TemplatePlan, for request: LayoutRequest) -> LayoutPlan {
         var plan = LayoutComposer.plan(from: design(from: choice, for: request), for: request)
         plan.choices = choice.displays
@@ -315,15 +344,44 @@ public enum LayoutTemplates {
         return result
     }
 
-    /// The slot next to main: "second" when the template has one, otherwise the top slot of the closest column,
-    /// the left one on a tie (the side for what the task needs).
+    /// The slot next to main: "second" when the template has one, otherwise the first slot by nearness.
     static func nearestSlotToMain(in template: LayoutTemplate) -> String? {
         if template.slotIDs.contains("second") { return "second" }
-        guard let mainColumn = template.columns.firstIndex(where: { $0.slots.contains { $0.id == "main" } }) else { return nil }
-        return template.columns.indices
-            .filter { $0 != mainColumn && !template.columns[$0].isStack && !template.columns[$0].slots.isEmpty }
-            .min { (abs($0 - mainColumn), $0) < (abs($1 - mainColumn), $1) }
-            .map { template.columns[$0].slots[0].id }
+        return template.slotsByNearness.first { $0.id != "main" }?.id
+    }
+
+    // MARK: Filling a template from a ranking
+
+    /// The template's slots filled from the ranking: the focused window in main, then the most relevant windows in the
+    /// slots nearest to it. Awareness slots take awareness windows first, other slots take task windows first; a
+    /// window goes only where it is readable. Background windows and everything left over wait hidden behind.
+    public static func fill(_ template: LayoutTemplate, on display: DisplayInfo, ranking: WindowRanking, request: LayoutRequest) -> DisplayChoice {
+        let onDisplay = request.windows.filter { $0.displayID == display.id }
+        let roleOf = Dictionary(ranking.windows.map { ($0.id, $0.role) }, uniquingKeysWith: { a, _ in a })
+        let rankOf = Dictionary(ranking.windows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var ordered = onDisplay.sorted { (rankOf[$0.id] ?? .max, $0.id) < (rankOf[$1.id] ?? .max, $1.id) }
+        if let focused = request.focusedWindowID, let index = ordered.firstIndex(where: { $0.id == focused }) {
+            ordered.insert(ordered.remove(at: index), at: 0)
+        }
+        let cascade = ordered.filter { !$0.resizable }.map(\.id)
+        var remaining = ordered.filter { $0.resizable }
+        let total = template.columns.map(\.share).reduce(0, +)
+        func width(of slot: TemplateSlot) -> CGFloat {
+            let column = template.columns.first { $0.slots.contains { $0.id == slot.id } }!
+            return display.visibleFrame.width * CGFloat(column.share / total)
+        }
+
+        var slots: [TemplateAssignment] = []
+        for slot in template.slotsByNearness {
+            let fits = { (w: WindowInfo) in slot.id == "main" || width(of: slot) >= readableWidth(of: w, in: request) }
+            let role = { (w: WindowInfo) in w.id == request.focusedWindowID ? .task : (roleOf[w.id] ?? .task) }
+            let preferred: WindowRole = slot.awareness ? .awareness : .task
+            let pick = remaining.firstIndex { role($0) == preferred && fits($0) }
+                ?? remaining.firstIndex { role($0) != .background && fits($0) }
+            guard let index = pick else { continue }
+            slots.append(TemplateAssignment(slot: slot.id, window: remaining.remove(at: index).id))
+        }
+        return DisplayChoice(id: display.id, template: template.id, slots: slots, stack: remaining.map(\.id), cascade: cascade)
     }
 
     // MARK: Filling a template
@@ -357,14 +415,14 @@ public enum LayoutTemplates {
 
             // Readability: a slot narrower than the window kind can use sends that window to the stack instead,
             // except the focused window, which keeps its slot. Widths are estimated from the full template.
-            let kindOf = Dictionary(request.windows.map { ($0.id, $0.kind) }, uniquingKeysWith: { a, _ in a })
+            let windowOf = Dictionary(request.windows.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             let totalShare = template.columns.map(\.share).reduce(0, +)
             var demoted: [Int] = []
             for column in template.columns where !column.isStack {
                 let width = display.visibleFrame.width * CGFloat(column.share / totalShare)
                 for slot in column.slots {
-                    guard let id = assigned[slot.id], id != request.focusedWindowID, let kind = kindOf[id] else { continue }
-                    if width < minimumWidth(for: kind) {
+                    guard let id = assigned[slot.id], id != request.focusedWindowID, let window = windowOf[id] else { continue }
+                    if width < readableWidth(of: window, in: request) {
                         assigned[slot.id] = nil
                         demoted.append(id)
                     }

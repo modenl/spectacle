@@ -29,19 +29,13 @@ public final class HotKeyCenter {
         }
     }
 
-    public func registerDefaultShortcuts(handler: @escaping ActionHandler, presetHandler: PresetHandler? = nil) {
+    /// Registers the shortcuts in effect (defaults plus the user's changes); call again after they change.
+    public func registerShortcuts(handler: @escaping ActionHandler, presetHandler: PresetHandler? = nil) {
         self.handler = handler
         self.presetHandler = presetHandler
         unregisterAll()
 
-        let bindings = DefaultShortcutBindings.all(
-            command: UInt32(cmdKey),
-            option: UInt32(optionKey),
-            control: UInt32(controlKey),
-            shift: UInt32(shiftKey)
-        )
-
-        for binding in bindings {
+        for binding in ShortcutStore.bindings() {
             register(binding)
         }
         if presetHandler != nil {

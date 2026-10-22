@@ -45,11 +45,15 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
     public var activity: [ActivityRecord] = []
     /// Named layouts the user saved; restored with ⌃⌥⌘1…9 in this order.
     public var presets: [LayoutPreset] = []
+    /// The template last chosen for each size of display ("wide", "standard", "small"); the next arrangement starts there.
+    public var templateChoice: [String: String] = [:]
+    /// Narrowest width each app was seen to accept (bundle id -> points), learned when a window would not shrink.
+    public var minimumWidths: [String: Int] = [:]
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case notes, corrections, arrangements, appStyles, activity, presets
+        case notes, corrections, arrangements, appStyles, activity, presets, templateChoice, minimumWidths
     }
 
     public init(from decoder: Decoder) throws {
@@ -60,6 +64,8 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
         appStyles = try container.decodeIfPresent([String: ArrangementStyle].self, forKey: .appStyles) ?? [:]
         activity = try container.decodeIfPresent([ActivityRecord].self, forKey: .activity) ?? []
         presets = try container.decodeIfPresent([LayoutPreset].self, forKey: .presets) ?? []
+        templateChoice = try container.decodeIfPresent([String: String].self, forKey: .templateChoice) ?? [:]
+        minimumWidths = try container.decodeIfPresent([String: Int].self, forKey: .minimumWidths) ?? [:]
     }
 
     public mutating func record(_ correction: LayoutCorrection) {

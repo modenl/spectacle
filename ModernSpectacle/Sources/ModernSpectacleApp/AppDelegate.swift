@@ -127,14 +127,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func addActionItems(_ actions: [WindowAction], to menu: NSMenu) {
         for action in actions {
-            let needsKey = (action == .smartArrange || action == .promoteFocused) && !model.hasAPIKey
-            let item = menuItem(needsKey ? L("\(action.title) (needs API key)", "\(action.title)（需要 API Key）") : action.title) { [weak self] in
+            let item = menuItem(action.title) { [weak self] in
                 self?.model.perform(action)
             }
             item.keyEquivalent = action.keyEquivalent
             item.keyEquivalentModifierMask = action.keyEquivalentModifierMask
-            item.toolTip = action.defaultShortcutDescription
-            item.isEnabled = (model.shortcutsEnabled || action.isHistoryAction) && !needsKey
+            item.toolTip = action.shortcutDescription
+            item.isEnabled = model.shortcutsEnabled || action.isHistoryAction
             menu.addItem(item)
         }
     }
@@ -201,43 +200,29 @@ private final class CallbackMenuItem: NSMenuItem {
 }
 
 private extension WindowAction {
+    /// The menu shows the shortcut in effect, which the user may have changed.
     var keyEquivalent: String {
-        switch self {
-        case .center: "c"
-        case .maximize: "f"
-        case .leftHalf, .upperLeft, .lowerLeft, .previousDisplay, .previousThird, .smaller:
-            "\u{F702}"
-        case .rightHalf, .upperRight, .lowerRight, .nextDisplay, .nextThird, .larger:
-            "\u{F703}"
-        case .topHalf:
-            "\u{F700}"
-        case .bottomHalf:
-            "\u{F701}"
-        case .undo, .redo:
-            "z"
-        case .smartArrange:
-            "a"
-        case .promoteFocused:
-            "\r"
+        guard let binding = ShortcutStore.binding(for: self) else { return "" }
+        switch binding.keyCode {
+        case 123: return "\u{F702}"
+        case 124: return "\u{F703}"
+        case 126: return "\u{F700}"
+        case 125: return "\u{F701}"
+        case 36: return "\r"
+        case 49: return " "
+        default:
+            guard let name = KeyNames.name(of: binding.keyCode), name.count == 1 else { return "" }
+            return name.lowercased()
         }
     }
 
     var keyEquivalentModifierMask: NSEvent.ModifierFlags {
-        switch self {
-        case .center, .maximize, .leftHalf, .rightHalf, .topHalf, .bottomHalf, .undo:
-            [.option, .command]
-        case .upperLeft, .upperRight:
-            [.control, .command]
-        case .lowerLeft, .lowerRight:
-            [.control, .shift, .command]
-        case .nextDisplay, .previousDisplay, .smartArrange, .promoteFocused:
-            [.control, .option, .command]
-        case .nextThird, .previousThird:
-            [.control, .option]
-        case .larger, .smaller:
-            [.control, .option, .shift]
-        case .redo:
-            [.option, .shift, .command]
-        }
+        guard let modifiers = ShortcutStore.binding(for: self)?.carbonModifiers else { return [] }
+        var mask: NSEvent.ModifierFlags = []
+        if modifiers & CarbonModifiers.control != 0 { mask.insert(.control) }
+        if modifiers & CarbonModifiers.option != 0 { mask.insert(.option) }
+        if modifiers & CarbonModifiers.shift != 0 { mask.insert(.shift) }
+        if modifiers & CarbonModifiers.command != 0 { mask.insert(.command) }
+        return mask
     }
 }

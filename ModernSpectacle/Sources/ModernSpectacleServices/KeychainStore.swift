@@ -9,6 +9,7 @@ import Security
 public enum KeychainStore {
     public static let service = "xyz.alvumo.ModernSpectacle"
     public static let apiKeyAccount = "anthropic-api-key"
+    public static let jevKeyAccount = "typesafe-api-key"
 
     private static let lock = NSLock()
     /// account -> value; a stored nil means "read, not present".
@@ -78,5 +79,9 @@ public enum KeychainStore {
 
     public static var hasAPIKey: Bool {
         string(for: apiKeyAccount)?.isEmpty == false
+    }
+
+    public static var hasJevKey: Bool {
+        string(for: jevKeyAccount)?.isEmpty == false
     }
 }

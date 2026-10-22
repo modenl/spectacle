@@ -1,9 +1,10 @@
 import AppKit
 import ModernSpectacleCore
 
-/// One hotkey: snapshot the desktop, get a plan (cached, from Claude, or the heuristic), apply it, and learn from
-/// what the user moves afterwards. Plans are pre-computed in the background when the window set changes, so the
-/// hotkey usually applies instantly.
+/// One hotkey: snapshot the desktop, rank the windows (cached, from Jev or Claude, or locally), fill the display's
+/// template from the ranking, apply it, and learn from what the user moves afterwards. Rankings are pre-computed in the
+/// background when the window set changes, so the hotkey usually applies instantly; pressing it again while the
+/// modifiers are still held cycles through the display's templates without asking the model again.
 @MainActor
 public final class SmartArranger {
     public struct Status: Equatable, Sendable {
@@ -14,18 +15,17 @@ public final class SmartArranger {
 
     public private(set) var status = Status(message: L("Idle", "空闲"), planner: nil, date: nil)
     public var onStatusChange: ((Status) -> Void)?
-    /// True while a plan is being requested from the model (not for cache hits or background pre-warming).
+    /// True while a ranking is being requested from the model (not for cache hits or background pre-warming).
     public var onBusyChange: ((Bool, String) -> Void)?
-    /// Pre-compute a plan whenever the window set changes. Costs one small API call per change.
+    /// Pre-compute a ranking whenever the window set changes. Costs one small API call per change.
     public var prewarmEnabled = true
 
     private let enumerator: WindowEnumerator
     private let windowController: WindowController
-    // Only exists while a Claude API key is configured: without a key there are no smart features at all.
+    // Only exists while a model key is configured: it feeds the focus history and the learning.
     private var windowObserver: WindowObserver?
     private let suggestion = SuggestionPanel()
-    private let heuristic = HeuristicPlanner()
-    private let claude: ClaudePlanner
+    private let rankers: [RankingModel: any WindowRanker]
     private let historyURL: URL
     /// What the planner remembers. Shown and edited in the Profile window.
     public private(set) var history: LayoutHistory {
@@ -49,9 +49,12 @@ public final class SmartArranger {
     private var focusTimeline: [(bundleID: String, app: String, window: String, start: Date)] = []
     /// "bundleID|title" -> when that window last had keyboard focus.
     private var windowFocus: [String: Date] = [:]
-    /// The model's last answer with the windows it was computed for. Only the template choice is reused: frames are
-    /// recomputed for the current snapshot, so focus changes since the plan was made are respected.
-    private var cachedPlan: (signature: String, plan: LayoutPlan, windows: [WindowInfo], planner: String, date: Date)?
+    /// The model's last ranking with the windows it was computed for, reused while the set of windows is the same.
+    private var cachedRanking: (signature: String, ranking: WindowRanking, windows: [WindowInfo], date: Date)?
+    /// Pressing Smart Arrange again before the modifiers are let go switches template on that display.
+    private var cycle: (displayID: Int, index: Int, lastPress: Date)?
+    private var modifiersHeld = false
+    private var flagsMonitors: [Any] = []
     private var prewarmTask: Task<Void, Never>?
     private var restackTask: Task<Void, Never>?
     private var settleTask: Task<Void, Never>?
@@ -73,12 +76,12 @@ public final class SmartArranger {
     public init(
         windowController: WindowController,
         enumerator: WindowEnumerator = WindowEnumerator(),
-        claude: ClaudePlanner = ClaudePlanner(),
+        rankers: [RankingModel: any WindowRanker] = [.jev: JevRanker(), .claude: ClaudeRanker()],
         historyURL: URL = SmartArranger.defaultHistoryURL
     ) {
         self.windowController = windowController
         self.enumerator = enumerator
-        self.claude = claude
+        self.rankers = rankers
         self.historyURL = historyURL
         history = LayoutHistory.load(from: historyURL)
         focusTimeline = history.activity.map { ($0.bundleID, $0.app, $0.window, $0.date) }
@@ -96,12 +99,20 @@ public final class SmartArranger {
                 Task { @MainActor in self?.schedulePrewarm() }
             })
         }
+        // Letting go of every modifier ends a template cycle; the next press arranges afresh.
+        let flagsChanged: (NSEvent) -> Void = { [weak self] event in
+            let held = !event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty
+            Task { @MainActor in if !held { self?.modifiersHeld = false } }
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flagsChanged) { flagsMonitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { flagsChanged($0); return $0 }) { flagsMonitors.append(local) }
         apiKeyDidChange()
     }
 
-    /// Starts or stops the smart features depending on whether a key is present.
+    /// Starts or stops the model-backed features depending on whether the chosen model has a key.
     public func apiKeyDidChange() {
-        if usesClaude {
+        cachedRanking = nil
+        if hasModelKey {
             if windowObserver == nil {
                 let observer = WindowObserver()
                 observer.onSettled = { [weak self] settled in
@@ -115,7 +126,6 @@ public final class SmartArranger {
             schedulePrewarm()
         } else {
             windowObserver = nil
-            cachedPlan = nil
             prewarmTask?.cancel()
         }
     }
@@ -125,16 +135,37 @@ public final class SmartArranger {
         return base.appendingPathComponent("ModernSpectacle/layout-history.json")
     }
 
-    public var usesClaude: Bool { KeychainStore.hasAPIKey }
+    /// The ranker for the model chosen in Settings, if its key is set; otherwise windows are ranked locally.
+    private var activeRanker: (any WindowRanker)? {
+        let hasKey = { (model: RankingModel) in model == .jev ? KeychainStore.hasJevKey : KeychainStore.hasAPIKey }
+        let model = RankingModel.effective(hasKey: hasKey)
+        return hasKey(model) ? rankers[model] : nil
+    }
+
+    public var hasModelKey: Bool { activeRanker != nil }
 
     // MARK: - Arrange
 
-    public func arrange() async {
-        Self.log("arrange requested (key: \(usesClaude), accessibility: \(AccessibilityPermission.isTrusted))")
-        guard usesClaude else {
-            update(L("Smart Arrange needs a Claude API key (Settings)", "智能排列需要 Claude API Key（在设置里填写）"), planner: nil)
-            return
+    /// The Smart Arrange key. A first press arranges every display; pressing again while the modifiers are still held
+    /// switches the focused display to its next template.
+    public func smartArrangeKey() {
+        let now = Date()
+        if let cycle, modifiersHeld, now.timeIntervalSince(cycle.lastPress) < 15 {
+            cycleTemplate(on: cycle.displayID, from: cycle.index, now: now)
+        } else {
+            Task { await arrange() }
         }
+        modifiersHeld = true
+    }
+
+    /// Forget an ongoing template cycle (the developer trigger has no modifiers to let go of).
+    public func endCycle() {
+        cycle = nil
+        modifiersHeld = false
+    }
+
+    public func arrange() async {
+        Self.log("arrange requested (ranker: \(activeRanker?.name ?? "local"), accessibility: \(AccessibilityPermission.isTrusted))")
         guard AccessibilityPermission.isTrusted else {
             update(L("Accessibility permission required", "需要辅助功能权限"), planner: nil)
             return
@@ -149,52 +180,105 @@ public final class SmartArranger {
         }
 
         lastRequest = request
-        let willCallModel = usesClaude && !hasFreshCachedPlan(for: request.signature)
-        onBusyChange?(true, willCallModel ? L("Arranging with Claude…", "Claude 正在排列…") : L("Arranging…", "正在排列…"))
-        let (plan, plannerName) = await plan(for: request, allowNetwork: true)
+        let willCallModel = activeRanker != nil && !hasFreshRanking(for: request.signature)
+        if willCallModel { onBusyChange?(true, L("Ranking windows…", "正在判断窗口…")) }
+        let ranking = await ranking(for: request, allowNetwork: true)
+        let choices = request.displays.map { display in
+            LayoutTemplates.fill(template(for: display), on: display, ranking: ranking, request: request)
+        }
+        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: summary(of: choices, request: request), notes: history.notes, displays: choices), for: request)
         // Frames come from the composer (exact tiling); still clamp and cover anything the design left out.
         let safe = PlanValidator.completed(PlanValidator.sanitized(plan, for: request), for: request)
         apply(safe, to: snapshot)
-        dumpLastArrangement(request: request, raw: plan, final: safe, planner: plannerName, rejected: snapshot.rejected, apps: snapshot.apps)
+        dumpLastArrangement(request: request, ranking: ranking, final: safe, rejected: snapshot.rejected, apps: snapshot.apps)
 
-        if plannerName == claude.name {
-            history.notes = safe.notes
+        if let notes = ranking.notes, !notes.isEmpty {
+            history.notes = String(notes.prefix(2000))
         }
-        remember(plan.choices, windows: request.windows)
+        remember(choices, windows: request.windows)
+        let focusedDisplay = request.windows.first { $0.id == request.focusedWindowID }?.displayID ?? request.displays.first { $0.isMain }?.id ?? 0
+        let focusedTemplate = choices.first { $0.id == focusedDisplay }?.template
+        cycle = (focusedDisplay, request.displays.first { $0.id == focusedDisplay }.flatMap { d in LayoutTemplates.candidates(for: d).firstIndex { $0.id == focusedTemplate } } ?? 0, Date())
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-        history.record(ArrangementRecord(date: started, planner: plannerName, summary: safe.summary, windowCount: safe.placements.count, durationMs: elapsed))
+        let source = ranking.source + (willCallModel ? "" : " cached")
+        history.record(ArrangementRecord(date: started, planner: source, summary: safe.summary, windowCount: safe.placements.count, durationMs: elapsed))
         saveHistory()
 
-        update("\(safe.summary) (\(plannerName), \(elapsed) ms)", planner: plannerName)
+        update("\(safe.summary) (\(source), \(elapsed) ms)", planner: source)
         onBusyChange?(false, "\(safe.summary)  ·  \(elapsed) ms")
         watchForCorrections(after: safe, snapshot: snapshot)
     }
 
-    private func hasFreshCachedPlan(for signature: String) -> Bool {
-        guard let cached = cachedPlan else { return false }
+    /// Next template on one display, filled from the same ranking: local and instant. The choice is remembered for this
+    /// size of display, so the next first press starts with it.
+    private func cycleTemplate(on displayID: Int, from index: Int, now: Date) {
+        let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
+        let request = makeRequest(from: snapshot, now: now)
+        guard let display = request.displays.first(where: { $0.id == displayID }) else { endCycle(); return }
+        let templates = LayoutTemplates.candidates(for: display)
+        let next = (index + 1) % templates.count
+        let template = templates[next]
+        let ranking = cachedOrLocalRanking(for: request)
+        let choice = LayoutTemplates.fill(template, on: display, ranking: ranking, request: request)
+        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: summary(of: [choice], request: request), notes: history.notes, displays: [choice]), for: request)
+        apply(PlanValidator.sanitized(plan, for: request), to: snapshot)
+        remember([choice], windows: request.windows)
+        history.templateChoice[LayoutTemplates.sizeClass(of: display)] = template.id
+        saveHistory()
+        cycle = (displayID, next, now)
+        update("\(next + 1)/\(templates.count) \(template.title)", planner: "local")
+        onBusyChange?(false, "\(next + 1)/\(templates.count)  \(template.title)")
+    }
+
+    /// The template last chosen for this size of display, or the first one.
+    private func template(for display: DisplayInfo) -> LayoutTemplate {
+        let templates = LayoutTemplates.candidates(for: display)
+        let remembered = history.templateChoice[LayoutTemplates.sizeClass(of: display)]
+        return templates.first { $0.id == remembered } ?? templates[0]
+    }
+
+    /// "Two on the right: Claude in main, 2 beside, 3 hidden", for the HUD and the history.
+    private func summary(of choices: [DisplayChoice], request: LayoutRequest) -> String {
+        let appOf = Dictionary(request.windows.map { ($0.id, $0.app) }, uniquingKeysWith: { a, _ in a })
+        return choices.map { choice in
+            let title = LayoutTemplates.template(id: choice.template)?.title ?? choice.template
+            let main = choice.slots.first { $0.slot == "main" }.flatMap { appOf[$0.window] } ?? "–"
+            let beside = choice.slots.count - 1
+            let hidden = choice.stack.count
+            return L("\(title): \(main) in main, \(beside) beside, \(hidden) hidden", "\(title)：\(main) 主位，旁边 \(beside) 个，后台 \(hidden) 个")
+        }.joined(separator: " | ")
+    }
+
+    private func hasFreshRanking(for signature: String) -> Bool {
+        guard let cached = cachedRanking else { return false }
         return cached.signature == signature && Date().timeIntervalSince(cached.date) < Self.cacheLifetime
     }
 
-    private func plan(for request: LayoutRequest, allowNetwork: Bool) async -> (LayoutPlan, String) {
-        let signature = request.signature
-        if let cached = cachedPlan, cached.signature == signature, Date().timeIntervalSince(cached.date) < Self.cacheLifetime {
-            guard let choices = cached.plan.choices else { return (cached.plan, cached.planner + " cached") }
-            let translated = LayoutTemplates.translate(choices, from: cached.windows, to: request.windows)
-            var plan = LayoutTemplates.plan(from: TemplatePlan(summary: cached.plan.summary, notes: cached.plan.notes, displays: translated), for: request)
-            plan.summary = cached.plan.summary
-            return (plan, cached.planner + " cached")
+    private func cachedOrLocalRanking(for request: LayoutRequest) -> WindowRanking {
+        if let cached = cachedRanking, hasFreshRanking(for: request.signature) {
+            return cached.ranking.translated(from: cached.windows, to: request.windows).covering(request)
         }
+        return LocalRanker.rank(request)
+    }
 
-        if allowNetwork, usesClaude {
+    private func ranking(for request: LayoutRequest, allowNetwork: Bool) async -> WindowRanking {
+        if hasFreshRanking(for: request.signature) || !allowNetwork {
+            return cachedOrLocalRanking(for: request)
+        }
+        if let ranker = activeRanker {
             do {
-                let plan = try await claude.plan(request)
-                cachedPlan = (signature, plan, request.windows, claude.name, Date())
-                return (plan, claude.name)
+                let ranking = try await ranker.rank(request).covering(request)
+                cachedRanking = (request.signature, ranking, request.windows, Date())
+                return ranking
+            } catch is CancellationError {
+                return LocalRanker.rank(request)
+            } catch let error as URLError where error.code == .cancelled {
+                return LocalRanker.rank(request)
             } catch {
-                NSLog("SmartArranger: Claude failed, using heuristic: \(error)")
+                Self.log("\(ranker.name) failed, ranking locally: \(error)")
             }
         }
-        return (heuristic.planNow(request), heuristic.name)
+        return LocalRanker.rank(request)
     }
 
     private func apply(_ plan: LayoutPlan, to snapshot: WindowEnumerator.Snapshot, frontID: Int? = nil) {
@@ -208,6 +292,7 @@ public final class SmartArranger {
             undo.append((entry.window, current))
             entry.window.setFrame(placement.rect)
             keepInsideDisplay(entry.window, planned: placement.rect, displays: snapshot.displays)
+            learnMinimumWidth(of: entry, planned: placement.rect)
         }
 
         if !undo.isEmpty {
@@ -228,7 +313,9 @@ public final class SmartArranger {
                 guard !Task.isCancelled else { return }
                 var retried = 0
                 for placement in plan.placements {
-                    guard let window = entriesByID[placement.id]?.window, let actual = window.frame else { continue }
+                    guard let entry = entriesByID[placement.id], let actual = entry.window.frame else { continue }
+                    let window = entry.window
+                    learnMinimumWidth(of: entry, planned: placement.rect)
                     // A window bigger than planned is at its app's minimum: aim for its own size, kept inside the display.
                     var target = placement.rect
                     if actual.width > target.width + 2 || actual.height > target.height + 2,
@@ -248,6 +335,17 @@ public final class SmartArranger {
                 Self.log("settle: set \(retried) window(s) again")
             }
         }
+    }
+
+    /// Remembers how narrow an app's windows can get when one would not shrink to its slot, so the next arrangement
+    /// does not put it where it would overlap its neighbour.
+    private func learnMinimumWidth(of entry: WindowEnumerator.Entry, planned: CGRect) {
+        guard let actual = entry.window.frame, actual.width > planned.width + 2 else { return }
+        let width = Int(actual.width.rounded())
+        guard width > history.minimumWidths[entry.info.bundleID] ?? 0 else { return }
+        history.minimumWidths[entry.info.bundleID] = width
+        saveHistory()
+        Self.log("learned: \(entry.info.app) is at least \(width) wide")
     }
 
     /// Some apps will not get narrower (or shorter) than their own minimum (Notes, Activity Monitor). Placed at the
@@ -312,7 +410,6 @@ public final class SmartArranger {
             }
             learnStyles(planned: planned.map { ($0.info, $0.rect) }, current: current)
             if changed > 0 {
-                cachedPlan = nil
                 saveHistory()
             }
         }
@@ -339,7 +436,7 @@ public final class SmartArranger {
     // MARK: - Watching the user's own moves
 
     private func handleUserMoves(_ settled: WindowObserver.Settled) {
-        guard usesClaude, Date() >= suppressObservationUntil, !suggestion.isVisible else { return }
+        guard hasModelKey, Date() >= suppressObservationUntil, !suggestion.isVisible else { return }
         let now = Date()
         var moves = recentUserMoves[settled.pid, default: [:]].filter { now.timeIntervalSince($0.value) < Self.userMoveMemory }
         for title in settled.movedTitles { moves[title] = now }
@@ -390,7 +487,6 @@ public final class SmartArranger {
             history.appStyles[bundleID] = .tiled
             saveHistory()
         }
-        cachedPlan = nil
         recentUserMoves.removeAll()
         update(L("Tiled \(ordered.count) \(ordered.first?.app ?? "") windows", "已平铺 \(ordered.count) 个 \(ordered.first?.app ?? "") 窗口"), planner: "user")
     }
@@ -441,7 +537,7 @@ public final class SmartArranger {
     }
 
     private func schedulePrewarm() {
-        guard prewarmEnabled, usesClaude, AccessibilityPermission.isTrusted else { return }
+        guard prewarmEnabled, hasModelKey, AccessibilityPermission.isTrusted else { return }
         prewarmTask?.cancel()
         prewarmTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.prewarmDebounce))
@@ -454,39 +550,24 @@ public final class SmartArranger {
         let now = Date()
         let request = makeRequest(from: enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now), now: now)
         let signature = request.signature
-        guard !request.windows.isEmpty, inFlightSignature != signature else { return }
-        if let cached = cachedPlan, cached.signature == signature, now.timeIntervalSince(cached.date) < Self.cacheLifetime {
-            return
-        }
+        guard !request.windows.isEmpty, inFlightSignature != signature, !hasFreshRanking(for: signature) else { return }
 
         inFlightSignature = signature
         defer { inFlightSignature = nil }
-        do {
-            let plan = try await claude.plan(request)
-            cachedPlan = (signature, plan, request.windows, claude.name, Date())
-        } catch {
-            NSLog("SmartArranger: pre-warm failed: \(error)")
-        }
+        _ = await ranking(for: request, allowNetwork: true)
     }
 
-    /// Everything about the last arrangement, for debugging and the Profile window: what was seen, what the model said, what was applied.
-    private func dumpLastArrangement(request: LayoutRequest, raw: LayoutPlan, final: LayoutPlan, planner: String, rejected: [String], apps: [String]) {
+    /// Everything about the last arrangement, for debugging and the Profile window: what was seen, how the windows
+    /// were ranked, what was applied.
+    private func dumpLastArrangement(request: LayoutRequest, ranking: WindowRanking, final: LayoutPlan, rejected: [String], apps: [String]) {
         struct Dump: Codable {
-            var planner: String
             var request: LayoutRequest
-            var modelPlan: LayoutPlan
+            var ranking: WindowRanking
             var appliedPlan: LayoutPlan
-            var skippedByModel: [String]
             var rejectedWindows: [String]
             var apps: [String]
         }
-        let placed = Set(raw.placements.map(\.id))
-        let dump = Dump(
-            planner: planner, request: request, modelPlan: raw, appliedPlan: final,
-            skippedByModel: request.windows.filter { !placed.contains($0.id) }.map { "\($0.app): \($0.title)" },
-            rejectedWindows: rejected,
-            apps: apps
-        )
+        let dump = Dump(request: request, ranking: ranking, appliedPlan: final, rejectedWindows: rejected, apps: apps)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -509,7 +590,7 @@ public final class SmartArranger {
 
     /// Forget the pre-computed plan so the next arrangement asks the model again.
     public func invalidateCache() {
-        cachedPlan = nil
+        cachedRanking = nil
     }
 
     // MARK: - Stability: previous choices and promotion
@@ -559,7 +640,6 @@ public final class SmartArranger {
         let safe = PlanValidator.sanitized(composed, for: request)
         apply(safe, to: snapshot, frontID: focused.id)
         remember(safe.choices, windows: request.windows)
-        cachedPlan = nil
         update(L("Brought \(focused.app) to main (\(choice.template))", "已把 \(focused.app) 移到主位（\(choice.template)）"), planner: "local")
         onBusyChange?(false, L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"))
     }
@@ -570,7 +650,7 @@ public final class SmartArranger {
     /// Called when presets are added or removed, so the menu can list them.
     public var onPresetsChange: (() -> Void)?
 
-    /// True when there is an applied template layout to save (after ⌃⌥⌘A, Bring to Main, or restoring a preset).
+    /// True when there is an applied template layout to save (after Smart Arrange, Bring to Main, or restoring a preset).
     public var canSavePreset: Bool { !lastChoices.isEmpty }
 
     /// Saves the layout currently applied, by app and window title, under `name`. Same name replaces.
@@ -582,8 +662,8 @@ public final class SmartArranger {
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
         let request = makeRequest(from: snapshot, now: now)
         guard let preset = LayoutPresets.make(name: trimmed, from: request.previous, request: request, date: now) else {
-            update(L("Nothing to save yet: arrange first (⌃⌥⌘A)", "还没有可保存的布局：先按 ⌃⌥⌘A 排列"), planner: nil)
-            onBusyChange?(false, L("Arrange first (⌃⌥⌘A), then save the layout", "先按 ⌃⌥⌘A 排列，再保存布局"))
+            update(L("Nothing to save yet: arrange first (\(WindowAction.smartArrange.shortcutDescription))", "还没有可保存的布局：先按 \(WindowAction.smartArrange.shortcutDescription) 排列"), planner: nil)
+            onBusyChange?(false, L("Arrange first (\(WindowAction.smartArrange.shortcutDescription)), then save the layout", "先按 \(WindowAction.smartArrange.shortcutDescription) 排列，再保存布局"))
             return false
         }
         history.presets = LayoutPresets.saving(preset, into: history.presets)
@@ -632,7 +712,6 @@ public final class SmartArranger {
         let safe = PlanValidator.sanitized(composed, for: request)
         apply(safe, to: snapshot, frontID: mainID)
         remember(choices, windows: request.windows)
-        cachedPlan = nil
 
         let placed = choices.map { $0.slots.count + $0.stack.count + $0.cascade.count }.reduce(0, +)
         let missing = preset.windowCount - placed
@@ -646,19 +725,19 @@ public final class SmartArranger {
 
     public func setNotes(_ notes: String) {
         history.notes = String(notes.prefix(2000))
-        cachedPlan = nil
+        cachedRanking = nil
         saveHistory()
     }
 
     public func setAppStyle(_ style: ArrangementStyle?, for bundleID: String) {
         history.appStyles[bundleID] = style
-        cachedPlan = nil
+        cachedRanking = nil
         saveHistory()
     }
 
     public func clearCorrections() {
         history.corrections.removeAll()
-        cachedPlan = nil
+        cachedRanking = nil
         saveHistory()
     }
 
@@ -667,7 +746,7 @@ public final class SmartArranger {
         var fresh = LayoutHistory()
         fresh.presets = history.presets
         history = fresh
-        cachedPlan = nil
+        cachedRanking = nil
         saveHistory()
     }
 
@@ -687,8 +766,8 @@ public final class SmartArranger {
             focusedWindowID: snapshot.windows.first { $0.isFocused }?.id,
             focusTimeline: timelineEvents(now: now)
         )
+        request.minimumWidths = history.minimumWidths
         request.language = Localization.isChinese ? "zh-Hans" : "en"
-        request.templates = LayoutTemplates.offers(for: request)
         request.previous = previousChoices(for: request.windows)
         return request
     }

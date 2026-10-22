@@ -1,8 +1,9 @@
 import Foundation
 import ModernSpectacleCore
 
-/// Asks Claude for a layout. One HTTPS request per plan; the system prompt and schema are cached server-side.
-public final class ClaudePlanner: LayoutPlanner, Sendable {
+/// Asks Claude which windows matter now. One HTTPS request per ranking; the system prompt and schema are cached
+/// server-side.
+public final class ClaudeRanker: WindowRanker, Sendable {
     public enum PlannerError: Error, CustomStringConvertible {
         case missingAPIKey
         case http(Int, String)
@@ -47,12 +48,6 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         return URLSession(configuration: configuration)
     }
 
-    public enum KeyCheck: Equatable, Sendable {
-        case valid
-        case invalid(String)
-        case unreachable(String)
-    }
-
     /// Cheapest possible authenticated call: lists one model. Says whether the key works without spending tokens.
     public static func check(apiKey: String) async -> KeyCheck {
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models?limit=1")!)
@@ -71,7 +66,7 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         }
     }
 
-    public func plan(_ request: LayoutRequest) async throws -> LayoutPlan {
+    public func rank(_ request: LayoutRequest) async throws -> WindowRanking {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else {
             throw PlannerError.missingAPIKey
         }
@@ -90,15 +85,11 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         guard status == 200 else {
             throw PlannerError.http(status, String(decoding: data, as: UTF8.self))
         }
-        let choice = try parseTemplatePlan(from: data)
-        var plan = LayoutTemplates.plan(from: choice, for: request)
-        let picked = choice.displays.map { "\($0.template)" }.joined(separator: ", ")
-        plan.summary = "[\(picked)] " + plan.summary
-        return plan
+        return try ClaudeRankingPrompt.ranking(fromModelJSON: try modelText(from: data), request: request)
     }
 
     func requestBody(for request: LayoutRequest) throws -> Data {
-        let schema = try JSONSerialization.jsonObject(with: Data(LayoutPrompt.outputSchemaJSON.utf8))
+        let schema = try JSONSerialization.jsonObject(with: Data(ClaudeRankingPrompt.outputSchemaJSON.utf8))
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 4096,
@@ -111,18 +102,18 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
             "system": [
                 [
                     "type": "text",
-                    "text": LayoutPrompt.systemPrompt,
+                    "text": ClaudeRankingPrompt.systemPrompt,
                     "cache_control": ["type": "ephemeral"],
                 ],
             ],
             "messages": [
-                ["role": "user", "content": try LayoutPrompt.userMessage(for: request)],
+                ["role": "user", "content": try RankingState(request).json()],
             ],
         ]
         return try JSONSerialization.data(withJSONObject: body)
     }
 
-    func parseTemplatePlan(from data: Data) throws -> TemplatePlan {
+    func modelText(from data: Data) throws -> String {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw PlannerError.malformed("not a JSON object")
         }
@@ -140,6 +131,6 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
         else {
             throw PlannerError.malformed("no text block")
         }
-        return try LayoutPrompt.decodeTemplatePlan(from: text)
+        return text
     }
 }

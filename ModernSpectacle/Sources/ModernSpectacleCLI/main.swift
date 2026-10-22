@@ -3,13 +3,15 @@ import Foundation
 import ModernSpectacleCore
 import ModernSpectacleServices
 
-// Developer tool: inspect the snapshot the planner sees and try planners without the app.
+// Developer tool: inspect the snapshot the ranker sees and try rankers without the app.
 //
 //   spectacle-cli snapshot            print the windows and displays as JSON
-//   spectacle-cli plan [--heuristic]  ask Claude (or the heuristic) for a plan and print it
-//   spectacle-cli plan --sample       plan a built-in sample desktop (no Accessibility needed)
-//   spectacle-cli arrange [--heuristic]  plan and apply
-//   spectacle-cli trigger             ask the running app to Smart Arrange (same as ⌃⌥⌘A)
+//   spectacle-cli plan [--jev|--claude|--local]
+//                                     rank the windows, fill each display's first template, print both
+//   spectacle-cli plan --sample …     the same for a built-in sample desktop (no Accessibility needed)
+//   spectacle-cli arrange …           rank, fill and apply
+//                                     Keys come from TYPESAFE_API_KEY / ANTHROPIC_API_KEY, else the keychain.
+//   spectacle-cli trigger             ask the running app to Smart Arrange (same as pressing the Smart Arrange shortcut)
 //   spectacle-cli trigger <command> [argument]
 //                                     ask the running app to run a WindowAction by name (leftHalf, promoteFocused…),
 //                                     restore <n>, save <name>, delete <name>, or check-updates
@@ -38,8 +40,15 @@ func run() async {
         print("sent")
         return
     }
-    let useHeuristic = args.contains("--heuristic") || !KeychainStore.hasAPIKey
-    let planner: any LayoutPlanner = useHeuristic ? HeuristicPlanner() : ClaudePlanner()
+    let environment = ProcessInfo.processInfo.environment
+    let ranker: (any WindowRanker)?
+    if args.contains("--local") {
+        ranker = nil
+    } else if args.contains("--claude") {
+        ranker = ClaudeRanker(apiKeyProvider: { environment["ANTHROPIC_API_KEY"] ?? KeychainStore.string(for: KeychainStore.apiKeyAccount) })
+    } else {
+        ranker = JevRanker(apiKeyProvider: { environment["TYPESAFE_API_KEY"] ?? KeychainStore.string(for: KeychainStore.jevKeyAccount) })
+    }
 
     let request: LayoutRequest
     let snapshot: WindowEnumerator.Snapshot?
@@ -54,7 +63,8 @@ func run() async {
         let enumerator = WindowEnumerator()
         let snap = enumerator.snapshot(lastActive: [:])
         snapshot = snap
-        request = LayoutRequest(displays: snap.displays, windows: snap.windows, recentApps: [], corrections: [], notes: "", localTime: "now")
+        request = LayoutRequest(displays: snap.displays, windows: snap.windows, recentApps: [], corrections: [], notes: "", localTime: "now",
+                                focusedWindowID: snap.windows.first { $0.isFocused }?.id)
     }
 
     let encoder = JSONEncoder()
@@ -66,11 +76,16 @@ func run() async {
     case "plan", "arrange":
         let started = Date()
         do {
-            let plan = try await planner.plan(request)
-            let safe = PlanValidator.sanitized(plan, for: request)
+            let ranking = try await ranker?.rank(request).covering(request) ?? LocalRanker.rank(request)
             let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-            print("planner: \(planner.name)  time: \(elapsed) ms")
-            print(String(decoding: try! encoder.encode(safe), as: UTF8.self))
+            print("ranker: \(ranking.source)  time: \(elapsed) ms")
+            let appOf = Dictionary(request.windows.map { ($0.id, "\($0.app): \($0.title)") }, uniquingKeysWith: { a, _ in a })
+            for ranked in ranking.windows {
+                print(String(format: "  %5.2f  %-10@ %@", ranked.relevance, ranked.role.rawValue as NSString, (appOf[ranked.id] ?? "?") as NSString))
+            }
+            let choices = request.displays.map { LayoutTemplates.fill(LayoutTemplates.candidates(for: $0)[0], on: $0, ranking: ranking, request: request) }
+            let safe = PlanValidator.sanitized(LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: choices), for: request), for: request)
+            print(String(decoding: try! encoder.encode(choices), as: UTF8.self))
             if command == "arrange", let snapshot {
                 let byID = Dictionary(snapshot.entries.map { ($0.info.id, $0) }, uniquingKeysWith: { a, _ in a })
                 for placement in safe.placements {
@@ -107,7 +122,8 @@ func sampleRequest() -> LayoutRequest {
         recentApps: ["Code", "Claude", "Terminal", "Google Chrome"],
         corrections: [],
         notes: "",
-        localTime: "Tuesday 14:30"
+        localTime: "Tuesday 14:30",
+        focusedWindowID: 1
     )
 }
 

@@ -80,7 +80,7 @@ final class ProfileWindowController: NSWindowController, NSWindowDelegate, NSTab
             let moved = L("moved \(last.windowCount)", "移动了 \(last.windowCount) 个")
             lastLayout.stringValue = "\(Self.dateFormatter.string(from: last.date)) · \(last.planner) · \(moved)\(took)\n\(last.summary)\n\(seen)"
         } else {
-            lastLayout.stringValue = L("No arrangement yet. Press ⌃⌥⌘A.", "还没有排列过。按 ⌃⌥⌘A 试试。")
+            lastLayout.stringValue = L("No arrangement yet. Press \(WindowAction.smartArrange.shortcutDescription).", "还没有排列过。按 \(WindowAction.smartArrange.shortcutDescription) 试试。")
         }
 
         stylesTable.reloadData()

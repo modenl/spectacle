@@ -138,8 +138,6 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
     public var focusedWindowID: Int?
     /// Most recent app switches first, with how long each stayed in front.
     public var focusTimeline: [FocusEvent]
-    /// Templates the planner may choose from, per display. Filled in by the arranger.
-    public var templates: [TemplateOffer]
     /// What was applied last time, with window ids translated to the current snapshot. Keeps layouts stable.
     public var previous: [DisplayChoice]
     public var corrections: [LayoutCorrection]
@@ -148,6 +146,8 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
     public var localTime: String
     /// Per-app arrangement style the user has shown by hand (bundle id -> style).
     public var appStyles: [String: ArrangementStyle]
+    /// Narrowest width each app was seen to accept (bundle id -> points); slots narrower than that are not used for it.
+    public var minimumWidths: [String: Int] = [:]
     /// The UI language ("en" or "zh-Hans"); the model writes its summary in it.
     public var language: String = "en"
 
@@ -161,7 +161,6 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
         appStyles: [String: ArrangementStyle] = [:],
         focusedWindowID: Int? = nil,
         focusTimeline: [FocusEvent] = [],
-        templates: [TemplateOffer] = [],
         previous: [DisplayChoice] = []
     ) {
         self.displays = displays
@@ -169,7 +168,6 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
         self.recentApps = recentApps
         self.focusedWindowID = focusedWindowID
         self.focusTimeline = focusTimeline
-        self.templates = templates
         self.previous = previous
         self.corrections = corrections
         self.notes = notes
@@ -177,9 +175,11 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
         self.appStyles = appStyles
     }
 
-    /// Changes when the set of windows or displays changes; used to decide whether a cached plan still applies.
+    /// Changes when apps open or close windows or the displays change; used to decide whether a cached ranking still
+    /// applies. Titles are left out on purpose: a terminal's title changes with every command, and asking the model again
+    /// for that would waste calls (the cached ranking follows retitled windows by app).
     public var signature: String {
-        let windowKeys = windows.map(\.key).sorted().joined(separator: "\n")
+        let windowKeys = windows.map(\.bundleID).sorted().joined(separator: "\n")
         let displayKeys = displays.map { "\($0.frame.x),\($0.frame.y),\($0.frame.w),\($0.frame.h)" }.joined(separator: ";")
         return displayKeys + "\n" + windowKeys
     }

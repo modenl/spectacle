@@ -1,9 +1,36 @@
 import CoreGraphics
 import Foundation
 
-public protocol LayoutPlanner: Sendable {
+/// Decides which windows matter now and in what role. The only part of Smart Arrange that may ask a model.
+public protocol WindowRanker: Sendable {
     var name: String { get }
-    func plan(_ request: LayoutRequest) async throws -> LayoutPlan
+    func rank(_ request: LayoutRequest) async throws -> WindowRanking
+}
+
+/// Which model ranks the windows. Chosen in Settings; each needs its own API key.
+public enum RankingModel: String, CaseIterable, Sendable {
+    case jev
+    case claude
+
+    public static let defaultsKey = "rankingModel"
+
+    public var title: String {
+        switch self {
+        case .jev: L("Jev (TypeSafe) – fastest", "Jev（TypeSafe）– 最快")
+        case .claude: "Claude (claude-haiku-5-5)"
+        }
+    }
+
+    /// What the user picked in Settings; nil until they pick.
+    public static var chosen: RankingModel? {
+        get { UserDefaults.standard.string(forKey: defaultsKey).flatMap(RankingModel.init(rawValue:)) }
+        set { UserDefaults.standard.set(newValue?.rawValue, forKey: defaultsKey) }
+    }
+
+    /// The model in use: the user's pick, otherwise the first one with a key (Jev before Claude), otherwise Jev.
+    public static func effective(hasKey: (RankingModel) -> Bool) -> RankingModel {
+        chosen ?? allCases.first(where: hasKey) ?? .jev
+    }
 }
 
 /// Makes any plan safe to apply: known windows only, kept on the display they are already on, not smaller than a usable window.

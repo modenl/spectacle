@@ -8,14 +8,15 @@ The rewrite intentionally avoids the riskiest parts of the legacy project:
 - no Sparkle 1.x updater or DSA update signature chain;
 - no bundled JavaScript execution for window-layout calculations;
 - no AppleScript automation to drive System Settings;
-- no network access except the Claude API (only with a key you enter) and a once-a-day update check against the store, which sends only the app version and can be turned off in Settings.
+- no network access except the ranking model you choose (Jev by TypeSafe or Claude, only with a key you enter) and a once-a-day update check against the store, which sends only the app version and can be turned off in Settings.
 
 The app is structured as a Swift package so the deterministic layout engine can be tested without launching a privileged UI process.
 
 ## Features
 
 - The classic Spectacle shortcuts (halves, quarters, thirds, displays, undo/redo).
-- Smart Arrange (⌃⌥⌘A): Claude picks a layout template and which window goes where; the geometry is computed locally. Bring to Main (⌃⌥⌘↩) swaps the focused window into the main slot.
+- Smart Arrange (⌃⌥⌘M): a model (Jev or Claude, chosen in Settings) ranks the windows by what you are doing; the display's template is filled from that ranking on the Mac. Press M again while still holding ⌃⌥⌘ to switch between the display's three templates. Without a key, windows are ranked locally by focus and recency. Bring to Main (⌃⌥⌘↩) swaps the focused window into the main slot.
+- Every shortcut can be changed in Settings.
 - Saved layouts: Save Layout… in the menu names the current arrangement; ⌃⌥⌘1…9 restores it, matching windows by app and title and moving them back to their display. Works without an API key.
 - English and Simplified Chinese UI, following the system language or the choice in Settings.
 - Update notice: once a day the app asks the store (store.alvumo.xyz) whether a newer version is out and offers to open the download. Nothing is downloaded or installed automatically.

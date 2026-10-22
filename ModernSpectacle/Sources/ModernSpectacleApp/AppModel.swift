@@ -7,15 +7,18 @@ final class AppModel {
     private(set) var accessibilityTrusted: Bool = AccessibilityPermission.isTrusted
     private(set) var shortcutsEnabled = true
     private(set) var arrangeStatus = L("Idle", "空闲")
-    private(set) var hasAPIKey = KeychainStore.hasAPIKey
-    /// Human-readable state of the stored key: shape and whether the API accepts it.
-    private(set) var apiKeyStatus = KeychainStore.hasAPIKey ? L("Stored, not checked yet", "已保存，尚未检查") : L("Not set", "未设置")
-    /// True once the API accepted the stored key.
-    private(set) var apiKeyValid = false
+    /// Human-readable state of each provider's stored key (its shape and whether the API accepts it); never the key.
+    struct KeyState {
+        var status: String
+        var valid = false
+    }
+    private(set) var keys: [RankingModel: KeyState] = Dictionary(uniqueKeysWithValues: RankingModel.allCases.map { model in
+        (model, KeyState(status: AppModel.hasKey(model) ? L("Stored, not checked yet", "已保存，尚未检查") : L("Not set", "未设置")))
+    })
 
     /// Called after any state above changes so the UI can re-read it.
     var onChange: (() -> Void)?
-    /// Called when the API key is added or removed, so the menu can enable or disable Smart Arrange.
+    /// Called when a key is added or removed, or the shortcuts change, so the menu can follow.
     var onAPIKeyChange: (() -> Void)?
     /// True while Smart Arrange is waiting for the model; the menu bar icon reflects it.
     var onBusyChange: ((Bool) -> Void)?
@@ -71,6 +74,8 @@ final class AppModel {
             let fresh = note.userInfo?["fresh"] != nil
             Task { @MainActor in
                 if fresh { self?.smartArranger.invalidateCache() }
+                // The developer trigger presses no modifiers, so it always arranges afresh.
+                self?.smartArranger.endCycle()
                 self?.perform(.smartArrange)
             }
         }
@@ -144,21 +149,15 @@ final class AppModel {
             return
         }
         if action == .smartArrange {
-            guard hasAPIKey else {
-                let frame = WindowEnumerator.currentDisplays().first?.visibleFrame ?? .zero
-                notice.show(message: L("Smart Arrange needs a Claude API key.", "智能排列需要 Claude API Key。"), acceptTitle: L("Open Settings", "打开设置"), near: frame) { [weak self] in
-                    self?.showSettings()
-                }
-                return
-            }
-            Task { await smartArranger.arrange() }
+            // Works without a key too: windows are then ranked locally by focus and recency.
+            smartArranger.smartArrangeKey()
             return
         }
         windowController.perform(action)
     }
 
     private func registerShortcuts() {
-        hotKeys.registerDefaultShortcuts(
+        hotKeys.registerShortcuts(
             handler: { [weak self] action in self?.perform(action) },
             presetHandler: { [weak self] index in self?.restorePreset(at: index) }
         )
@@ -182,7 +181,7 @@ final class AppModel {
     func promptToSavePreset() {
         guard canSavePreset else {
             let frame = WindowEnumerator.currentDisplays().first { $0.isMain }?.visibleFrame ?? .zero
-            hud.show(L("Arrange first (⌃⌥⌘A), then save the layout", "先按 ⌃⌥⌘A 排列，再保存布局"), near: frame, spinning: false, autoHideAfter: 3)
+            hud.show(L("Arrange first (\(WindowAction.smartArrange.shortcutDescription)), then save the layout", "先按 \(WindowAction.smartArrange.shortcutDescription) 排列，再保存布局"), near: frame, spinning: false, autoHideAfter: 3)
             return
         }
         let alert = NSAlert()
@@ -274,54 +273,88 @@ final class AppModel {
         onChange?()
     }
 
-    func saveAPIKey(_ key: String) {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            try KeychainStore.set(trimmed, for: KeychainStore.apiKeyAccount)
-        } catch {
-            NSLog("Could not store API key: \(error)")
-            apiKeyStatus = L("Could not save to Keychain (error \(error))", "无法保存到钥匙串（错误 \(error)）")
-        }
-        hasAPIKey = KeychainStore.hasAPIKey
+    // MARK: - Ranking model and keys
+
+    private static func account(for model: RankingModel) -> String {
+        model == .jev ? KeychainStore.jevKeyAccount : KeychainStore.apiKeyAccount
+    }
+
+    static func hasKey(_ model: RankingModel) -> Bool {
+        model == .jev ? KeychainStore.hasJevKey : KeychainStore.hasAPIKey
+    }
+
+    func hasKey(_ model: RankingModel) -> Bool { Self.hasKey(model) }
+
+    var rankingModel: RankingModel { RankingModel.effective(hasKey: Self.hasKey) }
+
+    func setRankingModel(_ model: RankingModel) {
+        RankingModel.chosen = model
         smartArranger.apiKeyDidChange()
         onChange?()
+    }
+
+    /// An empty key removes it.
+    func saveKey(_ key: String, for model: RankingModel) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try KeychainStore.set(trimmed, for: Self.account(for: model))
+        } catch {
+            NSLog("Could not store API key: \(error)")
+            keys[model] = KeyState(status: L("Could not save to Keychain (error \(error))", "无法保存到钥匙串（错误 \(error)）"))
+        }
+        smartArranger.apiKeyDidChange()
         onAPIKeyChange?()
-        if hasAPIKey {
-            checkAPIKey()
+        if hasKey(model) {
+            checkKey(for: model)
         } else {
-            apiKeyStatus = L("Not set", "未设置")
-            apiKeyValid = false
+            keys[model] = KeyState(status: L("Not set", "未设置"))
             onChange?()
         }
     }
 
-    /// Describes the key's shape, then asks the API whether it is accepted. Never shows the key itself.
-    func checkAPIKey() {
-        guard let key = KeychainStore.string(for: KeychainStore.apiKeyAccount), !key.isEmpty else {
-            apiKeyStatus = L("Not set", "未设置")
-            apiKeyValid = false
+    /// Describes the key's shape, then asks the provider whether it is accepted. Never shows the key itself.
+    func checkKey(for model: RankingModel) {
+        guard let key = KeychainStore.string(for: Self.account(for: model)), !key.isEmpty else {
+            keys[model] = KeyState(status: L("Not set", "未设置"))
             onChange?()
             return
         }
         let shape = L("\(key.prefix(7))… \(key.count) chars", "\(key.prefix(7))…，\(key.count) 个字符")
-        if !key.hasPrefix("sk-ant-") {
-            apiKeyStatus = L("Looks wrong: Anthropic keys start with sk-ant-api03- (got \(shape))", "格式不对：Anthropic 的 Key 以 sk-ant-api03- 开头（当前是 \(shape)）")
+        if model == .claude, !key.hasPrefix("sk-ant-") {
+            keys[model] = KeyState(status: L("Looks wrong: Anthropic keys start with sk-ant-api03- (got \(shape))", "格式不对：Anthropic 的 Key 以 sk-ant-api03- 开头（当前是 \(shape)）"))
             onChange?()
             return
         }
-        apiKeyStatus = L("Checking \(shape)…", "正在检查 \(shape)…")
-        apiKeyValid = false
+        keys[model] = KeyState(status: L("Checking \(shape)…", "正在检查 \(shape)…"))
         onChange?()
         Task { [weak self] in
-            let result = await ClaudePlanner.check(apiKey: key)
+            let result = model == .jev ? await JevRanker.check(apiKey: key) : await ClaudeRanker.check(apiKey: key)
             guard let self else { return }
             switch result {
-            case .valid: apiKeyStatus = L("Valid (\(shape))", "有效（\(shape)）"); apiKeyValid = true
-            case let .invalid(detail): apiKeyStatus = L("Rejected by the API: \(detail)", "API 拒绝了这个 Key：\(detail)")
-            case let .unreachable(detail): apiKeyStatus = L("Could not reach the API: \(detail)", "连不上 API：\(detail)")
+            case .valid: keys[model] = KeyState(status: L("Valid (\(shape))", "有效（\(shape)）"), valid: true)
+            case let .invalid(detail): keys[model] = KeyState(status: L("Rejected by the API: \(detail)", "API 拒绝了这个 Key：\(detail)"))
+            case let .unreachable(detail): keys[model] = KeyState(status: L("Could not reach the API: \(detail)", "连不上 API：\(detail)"))
             }
             onChange?()
         }
+    }
+
+    // MARK: - Shortcuts
+
+    /// While a new shortcut is being recorded, the global hotkeys must not fire (they would swallow the key press).
+    func beginShortcutRecording() {
+        hotKeys.unregisterAll()
+    }
+
+    func endShortcutRecording() {
+        if shortcutsEnabled { registerShortcuts() }
+    }
+
+    /// Re-registers the hotkeys and refreshes the menu after the user changed a shortcut.
+    func shortcutsDidChange() {
+        if shortcutsEnabled { registerShortcuts() }
+        onAPIKeyChange?()
+        onChange?()
     }
 
     func showSettings() {

@@ -69,13 +69,18 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable, Sendable 
         case .smaller: "⌃⌥⇧←"
         case .undo: "⌥⌘Z"
         case .redo: "⌥⇧⌘Z"
-        case .smartArrange: "⌃⌥⌘A"
+        case .smartArrange: "⌃⌥⌘M"
         case .promoteFocused: "⌃⌥⌘↩"
         }
     }
 
     public var menuTitle: String {
-        "\(title) (\(defaultShortcutDescription))"
+        "\(title) (\(shortcutDescription))"
+    }
+
+    /// The shortcut in effect, after the user's changes.
+    public var shortcutDescription: String {
+        ShortcutStore.description(for: self)
     }
 
     public var isHistoryAction: Bool {
