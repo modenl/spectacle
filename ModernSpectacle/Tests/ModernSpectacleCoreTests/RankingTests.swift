@@ -186,3 +186,37 @@ struct SlotFrameTests {
         #expect(slots[2].slot.awareness)
     }
 }
+
+@Suite
+struct ActiveDisplayTests {
+    private let external = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 1920, height: 1092), isMain: true)
+    private let laptop = DisplayInfo(id: 1, visibleFrame: CGRect(x: 1920, y: 142, width: 1512, height: 949), isMain: false)
+
+    private func window(_ id: Int, display: Int, focused: Bool = false) -> WindowInfo {
+        WindowInfo(id: id, app: "a\(id)", bundleID: "a\(id)", kind: .coding, title: "", frame: CGRect(x: display == 0 ? 10 : 1930, y: 150, width: 600, height: 400),
+                   displayID: display, isFocused: focused, appActiveSecondsAgo: nil)
+    }
+
+    @Test
+    func onlyTheFocusedWindowsDisplayIsArranged() {
+        let request = LayoutRequest(displays: [external, laptop], windows: [window(1, display: 1, focused: true), window(2, display: 0), window(3, display: 0)],
+                                    recentApps: [], corrections: [], notes: "", localTime: "t", focusedWindowID: 1)
+        #expect(request.activeDisplayID(pointer: nil) == 1)
+        let laptopOnly = request.restricted(to: 1)
+        #expect(laptopOnly.displays.map(\.id) == [1])
+        #expect(laptopOnly.windows.map(\.id) == [1])
+        // Nothing on the other display is planned, so nothing there moves.
+        let ranking = LocalRanker.rank(request)
+        let choice = LayoutTemplates.fill(LayoutTemplates.small[0], on: laptop, ranking: ranking, request: laptopOnly)
+        let plan = PlanValidator.completed(PlanValidator.sanitized(LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [choice]), for: laptopOnly), for: laptopOnly), for: laptopOnly)
+        #expect(Set(plan.placements.map(\.id)) == [1])
+    }
+
+    @Test
+    func withoutAFocusedWindowThePointerDecides() {
+        let request = LayoutRequest(displays: [external, laptop], windows: [window(2, display: 0)], recentApps: [], corrections: [], notes: "", localTime: "t")
+        #expect(request.activeDisplayID(pointer: CGPoint(x: 2500, y: 600)) == 1)
+        #expect(request.activeDisplayID(pointer: CGPoint(x: 500, y: 600)) == 0)
+        #expect(request.activeDisplayID(pointer: nil) == 0) // the main display
+    }
+}

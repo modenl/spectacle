@@ -175,6 +175,24 @@ public struct LayoutRequest: Codable, Equatable, Sendable {
         self.appStyles = appStyles
     }
 
+    /// Only one display and its windows: what Smart Arrange lays out. The other displays are left as they are.
+    public func restricted(to displayID: Int) -> LayoutRequest {
+        var request = self
+        request.displays = displays.filter { $0.id == displayID }
+        request.windows = windows.filter { $0.displayID == displayID }
+        if let focused = focusedWindowID, !request.windows.contains(where: { $0.id == focused }) { request.focusedWindowID = nil }
+        request.previous = previous.filter { $0.id == displayID }
+        return request
+    }
+
+    /// The display the person is working on: the focused window's, else the one under the pointer, else the main one.
+    /// `pointer` is in Accessibility coordinates.
+    public func activeDisplayID(pointer: CGPoint?) -> Int? {
+        if let focused = windows.first(where: { $0.id == focusedWindowID }) { return focused.displayID }
+        if let pointer, let display = displays.first(where: { $0.visibleFrame.insetBy(dx: -1, dy: -40).contains(pointer) }) { return display.id }
+        return displays.first { $0.isMain }?.id ?? displays.first?.id
+    }
+
     /// Changes when apps open or close windows or the displays change; used to decide whether a cached ranking still
     /// applies. Titles are left out on purpose: a terminal's title changes with every command, and asking the model again
     /// for that would waste calls (the cached ranking follows retitled windows by app).

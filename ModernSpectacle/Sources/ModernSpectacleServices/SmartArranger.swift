@@ -200,7 +200,9 @@ public final class SmartArranger {
         }
         lastRequest = request
         let needsModel = activeRanker != nil && !hasFreshRanking(for: request.signature)
-        let focusedDisplay = request.windows.first { $0.id == request.focusedWindowID }?.displayID ?? request.displays.first { $0.isMain }?.id ?? 0
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        let pointer = CGPoint(x: NSEvent.mouseLocation.x, y: mainHeight - NSEvent.mouseLocation.y)
+        let focusedDisplay = request.activeDisplayID(pointer: pointer) ?? 0
         var templateIndex: [Int: Int] = [:]
         for display in request.displays {
             let templates = LayoutTemplates.candidates(for: display)
@@ -261,9 +263,10 @@ public final class SmartArranger {
         return templates[(index ?? 0) % templates.count]
     }
 
-    /// The plan the session would apply right now: every display's template filled from the ranking.
+    /// The plan the session would apply right now: the active display's template filled from the ranking. Only that
+    /// display is arranged; windows on the others stay where they are (the ranking still saw all of them).
     private func plan(of current: Session, ranking: WindowRanking) -> (choices: [DisplayChoice], plan: LayoutPlan) {
-        let request = current.request
+        let request = current.request.restricted(to: current.focusedDisplay)
         let choices = request.displays.map { display in
             LayoutTemplates.fill(template(at: current.templateIndex[display.id], for: display), on: display, ranking: ranking, request: request)
         }
@@ -277,7 +280,7 @@ public final class SmartArranger {
     private func showPreview(morphing: Bool) {
         guard let current = session else { return }
         var slots: [ArrangementPreview.Slot] = []
-        for display in current.request.displays {
+        for display in current.request.displays where display.id == current.focusedDisplay {
             let template = template(at: current.templateIndex[display.id], for: display)
             var frames = LayoutTemplates.slotFrames(of: template, in: display.visibleFrame).map { (id: $0.slot.id, awareness: $0.slot.awareness, rect: $0.rect) }
             if let ranking = current.ranking {
@@ -299,8 +302,8 @@ public final class SmartArranger {
         } else {
             caption = .init(text: "", index: 0, count: 0)
         }
-        let focused = current.request.windows.first { $0.id == current.request.focusedWindowID }?.frame.cgRect
-        preview.present(slots: slots, caption: caption, waiting: current.ranking == nil, near: focused)
+        let active = current.request.displays.first { $0.id == current.focusedDisplay }?.visibleFrame
+        preview.present(slots: slots, caption: caption, waiting: current.ranking == nil, near: active)
     }
 
     /// The blocks of a plan, keyed by window, so a window's block can be followed from one plan to the next.
@@ -336,7 +339,7 @@ public final class SmartArranger {
             history.notes = String(notes.prefix(2000))
         }
         remember(choices, windows: request.windows)
-        for display in request.displays {
+        if let display = request.displays.first(where: { $0.id == current.focusedDisplay }) {
             let templates = LayoutTemplates.candidates(for: display)
             history.templateChoice[LayoutTemplates.sizeClass(of: display)] = templates[(current.templateIndex[display.id] ?? 0) % templates.count].id
         }
