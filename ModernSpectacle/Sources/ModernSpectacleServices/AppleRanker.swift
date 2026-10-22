@@ -35,24 +35,15 @@ public final class AppleRanker: WindowRanker, Sendable {
         let session = LanguageModelSession(instructions: RankingPrompt.instructions)
         let response = try await session.respond(to: try RankingState(request).json(), generating: AppleAnswer.self,
                                                  options: GenerationOptions(sampling: .greedy))
-        let items = response.content.windows.map { (id: $0.id, role: WindowRole(rawValue: $0.role) ?? .background) }
-        return RankingPrompt.ranking(fromOrdered: items, request: request, source: name)
+        return RankingPrompt.ranking(task: response.content.task, awareness: response.content.awareness, request: request, source: name)
     }
 }
 
 @available(macOS 26.0, *)
 @Generable
 struct AppleAnswer {
-    @Guide(description: "Every window, most relevant to the current task first")
-    var windows: [AppleRankedWindow]
-}
-
-@available(macOS 26.0, *)
-@Generable
-struct AppleRankedWindow {
-    @Guide(description: "The window's id")
-    var id: Int
-    @Guide(description: "task: needed for the current task; awareness: kept an eye on but not worked in; background: not needed now",
-           .anyOf(["task", "awareness", "background"]))
-    var role: String
+    @Guide(description: "Ids of the windows the current task needs, most relevant first")
+    var task: [Int]
+    @Guide(description: "Ids of windows to keep an eye on")
+    var awareness: [Int]
 }

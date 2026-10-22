@@ -405,7 +405,9 @@ public final class SmartArranger {
         }
         if let ranker = activeRanker {
             do {
+                let started = Date()
                 let ranking = try await ranker.rank(request).covering(request)
+                Self.log("\(ranker.name) ranked \(request.windows.count) windows in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 cachedRanking = (request.signature, ranking, request.windows, Date())
                 return ranking
             } catch is CancellationError {

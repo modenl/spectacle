@@ -72,10 +72,12 @@ struct RankingTests {
     func theModelsOrderBecomesTheRankingAndForgottenWindowsAreAppended() {
         let req = request(laptop, [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "slack", .chat)])
         // As the on-device model might answer: a repeat and an id that does not exist, and Slack left out.
-        let ranked = RankingPrompt.ranking(fromOrdered: [(2, .task), (1, .task), (2, .task), (99, .task)], request: req, source: "apple")
+        let ranked = RankingPrompt.ranking(task: [2, 1, 2, 99], awareness: [], request: req, source: "apple")
         #expect(ranked.windows.map(\.id) == [2, 1, 3])
-        #expect(ranked.windows.map(\.role) == [.task, .task, .awareness])
+        #expect(ranked.windows.map(\.role) == [.task, .task, .background]) // what it left out is background
         #expect(ranked.source == "apple")
+        let withChat = RankingPrompt.ranking(task: [1], awareness: [3], request: req, source: "apple")
+        #expect(withChat.windows.map(\.role) == [.task, .awareness, .background])
     }
 
     @Test
@@ -84,7 +86,7 @@ struct RankingTests {
         let state = RankingState(request(laptop, many))
         #expect(state.windows.count == 30)
         let long = request(laptop, [WindowInfo(id: 1, app: "a", bundleID: "a", kind: .coding, title: String(repeating: "x", count: 200), frame: .zero, displayID: 0, isFocused: true, appActiveSecondsAgo: nil)])
-        #expect(RankingState(long).windows[0].title.count == 60)
+        #expect(RankingState(long).windows[0].title.count == 50)
     }
 
     @Test
