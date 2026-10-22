@@ -129,39 +129,7 @@ struct LayoutPresetTests {
 }
 
 @Suite
-struct UpdateAndLanguageTests {
-    @Test
-    func versionsCompareNumerically() {
-        #expect(UpdatePolicy.isNewer("0.3.0", than: "0.2.1"))
-        #expect(UpdatePolicy.isNewer("1.10", than: "1.9"))
-        #expect(!UpdatePolicy.isNewer("1.2", than: "1.2.0"))
-        #expect(!UpdatePolicy.isNewer("0.2.1", than: "0.3.0"))
-    }
-
-    @Test
-    func notifiesOnlyForNewerUnskippedVersions() throws {
-        // The store's actual answer shape.
-        let json = #"{"id":"modern-spectacle","name":"ModernSpectacle","version":"0.3.0","date":"2026-10-21T22:38:54.528Z","notes":"预设布局","url":"https://store.alvumo.xyz/app/modern-spectacle","download":{"url":"https://store.alvumo.xyz/app/modern-spectacle/dl/6/ModernSpectacle-0.3.0-universal.dmg","name":"ModernSpectacle-0.3.0-universal.dmg","size":1,"sha256":"x","platform":"macos","arch":"universal"},"updateAvailable":true}"#
-        let release = try JSONDecoder().decode(StoreRelease.self, from: Data(json.utf8))
-        #expect(release.download?.name == "ModernSpectacle-0.3.0-universal.dmg")
-        #expect(UpdatePolicy.shouldNotify(release, current: "0.2.1", skipped: nil))
-        #expect(!UpdatePolicy.shouldNotify(release, current: "0.2.1", skipped: "0.3.0"))
-        #expect(!UpdatePolicy.shouldNotify(release, current: "0.3.0", skipped: nil))
-
-        let noBuild = try JSONDecoder().decode(StoreRelease.self, from: Data(#"{"version":"0.3.0","notes":"","url":"https://store.alvumo.xyz/app/modern-spectacle","download":null}"#.utf8))
-        #expect(noBuild.download == nil)
-    }
-
-    @Test
-    func checksAtMostOnceADay() {
-        let now = Date()
-        #expect(UpdatePolicy.isCheckDue(lastCheck: nil, now: now))
-        #expect(!UpdatePolicy.isCheckDue(lastCheck: now.addingTimeInterval(-3600), now: now))
-        #expect(UpdatePolicy.isCheckDue(lastCheck: now.addingTimeInterval(-UpdatePolicy.checkInterval), now: now))
-        let url = UpdatePolicy.latestURL(current: "0.3.0", arch: nil).absoluteString
-        #expect(url == "https://store.alvumo.xyz/api/app/modern-spectacle/latest?platform=macos&current=0.3.0")
-    }
-
+struct LanguageTests {
     @Test
     func languageFollowsSystemUnlessChosen() {
         #expect(Localization.isChinese(.system, preferredLanguages: ["zh-Hans-CN", "en-US"]))

@@ -21,7 +21,16 @@ public enum Localization {
 
     public static var language: AppLanguage {
         get { UserDefaults.standard.string(forKey: defaultsKey).flatMap(AppLanguage.init(rawValue:)) ?? .system }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+            // Text AppKit and Sparkle draw (standard buttons, the About panel, update dialogs) follows the app's
+            // AppleLanguages, read at launch.
+            switch newValue {
+            case .system: UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+            case .english: UserDefaults.standard.set(["en"], forKey: "AppleLanguages")
+            case .chinese: UserDefaults.standard.set(["zh-Hans"], forKey: "AppleLanguages")
+            }
+        }
     }
 
     public static var isChinese: Bool {

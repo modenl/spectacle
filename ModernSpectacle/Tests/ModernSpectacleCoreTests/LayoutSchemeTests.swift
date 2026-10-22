@@ -93,17 +93,6 @@ struct LayoutSchemeTests {
 @Suite
 struct HardeningTests {
     @Test
-    func updateLinksStayOnTheStore() {
-        let page = UpdatePolicy.storePageURL
-        let download = URL(string: "https://store.alvumo.xyz/download/modern-spectacle/1.0/x.dmg")!
-        #expect(UpdatePolicy.openable(download) == download)
-        for bad in ["file:///System/Applications/Calculator.app", "http://store.alvumo.xyz/app/x", "https://evil.example/app",
-                    "https://user:pw@store.alvumo.xyz/x", "https://store.alvumo.xyz:8443/x", "slack://open"] {
-            #expect(UpdatePolicy.openable(URL(string: bad)!) == page)
-        }
-    }
-
-    @Test
     func malformedSlotsAndFloorsDoNotCrash() {
         #expect(SchemeLoader.parseSlot("") == nil)
         #expect(SchemeLoader.parseSlot(":0.5") == nil)

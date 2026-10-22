@@ -22,7 +22,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             button.image?.isTemplate = true
         }
-        model.checkForUpdatesIfDue()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -76,11 +75,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
 
         menu.addItem(menuItem(L("Check for Updates...", "检查更新...")) { [weak self] in
-            self?.model.checkForUpdatesNow()
+            self?.model.updater.checkNow()
         })
 
         menu.addItem(menuItem(L("Modern Spectacle in the Store", "在商店中查看 Modern Spectacle")) {
-            NSWorkspace.shared.open(UpdatePolicy.storePageURL)
+            NSWorkspace.shared.open(Updater.storePageURL)
         })
 
         menu.addItem(menuItem(L("Settings...", "设置...")) { [weak self] in

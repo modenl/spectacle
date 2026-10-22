@@ -12,6 +12,10 @@ let package = Package(
         .executable(name: "spectacle-cli", targets: ["ModernSpectacleCLI"]),
         .library(name: "ModernSpectacleCore", targets: ["ModernSpectacleCore"])
     ],
+    dependencies: [
+        // Self-updates from the store's appcast; build-app.sh copies Sparkle.framework into the app.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.4")
+    ],
     targets: [
         .target(name: "ModernSpectacleCore"),
         .target(
@@ -22,8 +26,10 @@ let package = Package(
             name: "ModernSpectacleApp",
             dependencies: [
                 "ModernSpectacleCore",
-                "ModernSpectacleServices"
-            ]
+                "ModernSpectacleServices",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .executableTarget(
             name: "ModernSpectacleCLI",

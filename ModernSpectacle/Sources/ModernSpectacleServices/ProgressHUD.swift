@@ -23,7 +23,7 @@ public final class ProgressHUD {
             let stack = NSStackView(views: [spinner, label])
             stack.orientation = .horizontal
             stack.spacing = 8
-            stack.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 16)
+            let content = NSView.padding(stack, NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 18))
 
             let panel = NSPanel(
                 contentRect: NSRect(x: 0, y: 0, width: 240, height: 44),
@@ -38,7 +38,7 @@ public final class ProgressHUD {
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
             panel.ignoresMouseEvents = true
-            panel.contentView = stack
+            panel.contentView = content
             self.panel = panel
         }
         guard let panel else { return }

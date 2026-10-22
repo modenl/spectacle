@@ -20,7 +20,7 @@ final class AppModel {
     private let hud = ProgressHUD()
 
     let loginItems = LoginItemController()
-    let updates = UpdateChecker()
+    let updater = Updater()
     private let hotKeys = HotKeyCenter()
     private let windowController = WindowController()
     private let smartArranger: SmartArranger
@@ -74,7 +74,7 @@ final class AppModel {
             }
         }
         // `spectacle-cli trigger <command> [argument]` posts this: any WindowAction by name, restore <n>, save <name>,
-        // delete <name>, check-updates. Lets every feature be exercised without pressing keys.
+        // delete <name>, check-updates, show-notices. Lets every feature be exercised without pressing keys.
         commandObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("xyz.alvumo.ModernSpectacle.command"), object: nil, queue: .main
         ) { [weak self] note in
@@ -91,7 +91,11 @@ final class AppModel {
         case "restore": if let number = Int(argument), (1...9).contains(number) { restorePreset(at: number - 1) }
         case "save": if requireAccessibility() { smartArranger.savePreset(named: argument) }
         case "delete": smartArranger.deletePreset(named: argument)
-        case "check-updates": checkForUpdatesNow()
+        case "check-updates": updater.checkNow()
+        // Shows the permission notice and the HUD with sample text, to check their layout.
+        case "show-notices":
+            hud.show(L("Checking for updates…", "正在检查更新…"), near: mainDisplayFrame, autoHideAfter: 10)
+            showAccessibilityNotice()
         // Smart Arrange as if the modifiers stayed held: press shows or switches, release applies, cancel is Esc.
         case "press": if requireAccessibility() { smartArranger.smartArrangeKey(holding: true) }
         case "release": smartArranger.releaseModifiers()
@@ -109,6 +113,11 @@ final class AppModel {
         refreshPermissions()
         if accessibilityTrusted { return true }
         SmartArranger.log("blocked: no Accessibility permission")
+        showAccessibilityNotice()
+        return false
+    }
+
+    private func showAccessibilityNotice() {
         notice.show(
             message: L(
                 "Modern Spectacle needs Accessibility permission to move windows. Turn on Modern Spectacle in System Settings → Privacy & Security → Accessibility, then try again. If it is already on, select it, remove it with −, and add it again: macOS keeps the permission for the copy it was given to.",
@@ -121,7 +130,6 @@ final class AppModel {
             AccessibilityPermission.requestTrustPrompt()
             AccessibilityPermission.openSettings()
         }
-        return false
     }
 
     func refreshPermissions() {
@@ -259,55 +267,8 @@ final class AppModel {
         }
     }
 
-    // MARK: - Updates
-
     private var mainDisplayFrame: CGRect {
         WindowEnumerator.currentDisplays().first { $0.isMain }?.visibleFrame ?? WindowEnumerator.currentDisplays().first?.visibleFrame ?? .zero
-    }
-
-    /// At launch: once a day at most, silent unless there is something new.
-    func checkForUpdatesIfDue() {
-        guard updates.isCheckDue else { return }
-        Task {
-            if case let .available(release) = await updates.check(userInitiated: false) {
-                showUpdate(release)
-            }
-        }
-    }
-
-    /// From the menu or Settings: always says what it found.
-    func checkForUpdatesNow() {
-        hud.show(L("Checking for updates…", "正在检查更新…"), near: mainDisplayFrame)
-        Task {
-            let result = await updates.check(userInitiated: true)
-            switch result {
-            case let .available(release):
-                hud.hide()
-                showUpdate(release)
-            case let .upToDate(version):
-                hud.show(L("ModernSpectacle \(version) is up to date", "ModernSpectacle \(version) 已是最新版本"), near: mainDisplayFrame, spinning: false, autoHideAfter: 3)
-            case let .failed(detail):
-                hud.show(L("Could not check for updates: \(detail)", "检查更新失败：\(detail)"), near: mainDisplayFrame, spinning: false, autoHideAfter: 4)
-            }
-        }
-    }
-
-    private func showUpdate(_ release: StoreRelease) {
-        let notes = release.notes.count > 240 ? String(release.notes.prefix(240)) + "…" : release.notes
-        let headline = L(
-            "ModernSpectacle \(release.version) is available (you have \(UpdateChecker.currentVersion)).",
-            "ModernSpectacle \(release.version) 已发布（当前 \(UpdateChecker.currentVersion)）。"
-        )
-        notice.show(
-            message: notes.isEmpty ? headline : "\(headline)\n\n\(notes)",
-            acceptTitle: L("Download", "下载"),
-            dismissTitle: L("Later", "以后再说"),
-            alternateTitle: L("Skip This Version", "跳过此版本"),
-            near: mainDisplayFrame,
-            timeout: 60,
-            onAccept: { NSWorkspace.shared.open(UpdatePolicy.openable(release.download?.url ?? release.url)) },
-            onAlternate: { [weak self] in self?.updates.skip(release.version) }
-        )
     }
 
     func setShortcutsEnabled(_ enabled: Bool) {

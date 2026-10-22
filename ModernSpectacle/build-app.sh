@@ -5,7 +5,6 @@ APP_NAME="ModernSpectacle"
 PRODUCT_NAME="ModernSpectacle"
 BUNDLE_ID="${BUNDLE_ID:-xyz.alvumo.ModernSpectacle}"
 VERSION="0.3.1"
-BUILD_NUMBER="${BUILD_NUMBER:-5}"
 CONFIGURATION="${CONFIGURATION:-release}"
 # Space-separated list, e.g. ARCHS="arm64 x86_64" for a universal binary.
 ARCHS="${ARCHS:-}"
@@ -42,6 +41,13 @@ rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 cp "${BIN_DIR}/${PRODUCT_NAME}" "${MACOS_DIR}/${APP_NAME}"
+mkdir -p "${CONTENTS_DIR}/Frameworks"
+ditto "${BIN_DIR}/Sparkle.framework" "${CONTENTS_DIR}/Frameworks/Sparkle.framework"
+# Declares both languages to AppKit and Sparkle, so the text they draw is translated too.
+for lang in en zh-Hans; do
+  mkdir -p "${RESOURCES_DIR}/${lang}.lproj"
+  echo '/* Strings are in the code: L("English", "中文"). */' > "${RESOURCES_DIR}/${lang}.lproj/InfoPlist.strings"
+done
 # The Jev key built into the app, if jev.key exists (gitignored). Anyone with the app can read it.
 if [[ -s "${SCRIPT_DIR}/jev.key" ]]; then
   cp "${SCRIPT_DIR}/jev.key" "${RESOURCES_DIR}/jev.key"
@@ -88,7 +94,13 @@ cat > "${CONTENTS_DIR}/Info.plist" <<PLIST
 	<key>CFBundleShortVersionString</key>
 	<string>${VERSION}</string>
 	<key>CFBundleVersion</key>
-	<string>${BUILD_NUMBER}</string>
+	<string>${VERSION}</string>
+	<key>SUFeedURL</key>
+	<string>https://store.alvumo.xyz/app/modern-spectacle/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>b0k56U7FaPBkMteSMna1a94jHtf00w6sMXU2bUwPZLs=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Alvumo. Based on Spectacle by Eric Czarny (MIT License).</string>
 	<key>LSApplicationCategoryType</key>
@@ -121,12 +133,20 @@ if [[ -n "${SIGN_IDENTITY}" ]]; then
   # Hardened runtime always; a secure timestamp too unless signing for development (notarization needs both).
   TIMESTAMP=(--timestamp)
   [[ "${SIGN_IDENTITY}" == "Apple Development:"* ]] && TIMESTAMP=()
+  # Sparkle's helpers first, inside out, then the framework, then the app.
+  SPARKLE="${CONTENTS_DIR}/Frameworks/Sparkle.framework/Versions/B"
+  for part in XPCServices/Installer.xpc XPCServices/Downloader.xpc Autoupdate Updater.app; do
+    codesign --force --options runtime ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} --preserve-metadata=entitlements \
+      --sign "${SIGN_IDENTITY}" "${SPARKLE}/${part}" >/dev/null
+  done
+  codesign --force --options runtime ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} \
+    --sign "${SIGN_IDENTITY}" "${CONTENTS_DIR}/Frameworks/Sparkle.framework" >/dev/null
   codesign --force --options runtime ${TIMESTAMP[@]+"${TIMESTAMP[@]}"} \
     --entitlements "${SCRIPT_DIR}/Resources/ModernSpectacle.entitlements" \
     --sign "${SIGN_IDENTITY}" "${APP_DIR}" >/dev/null
   codesign --verify --strict "${APP_DIR}"
 else
-  codesign --force --sign - "${APP_DIR}" >/dev/null
+  codesign --force --deep --sign - "${APP_DIR}" >/dev/null
   echo "warning: no Apple Development signing identity found; used ad-hoc signing." >&2
   echo "warning: macOS may require Accessibility permission again after each rebuild." >&2
 fi

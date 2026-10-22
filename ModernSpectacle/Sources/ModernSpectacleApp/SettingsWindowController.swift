@@ -46,7 +46,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window?.title = L("Modern Spectacle Settings", "Modern Spectacle 设置")
         accessibilityButton.title = L("Open Accessibility Prompt", "打开辅助功能授权")
         loginToggle.title = L("Launch at Login", "登录时启动")
-        updatesToggle.title = L("Check for updates automatically (once a day)", "自动检查更新（每天一次）")
+        updatesToggle.title = L("Check for updates automatically (once a day) and install them in place", "自动检查更新（每天一次），直接在原地安装")
         languagePopup.removeAllItems()
         for language in AppLanguage.allCases {
             languagePopup.addItem(withTitle: language.title)
@@ -96,7 +96,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         jevStatus.stringValue = model.jevKeyStatus
         jevStatus.textColor = model.jevKeyValid == true ? .systemGreen : model.jevKeyValid == false ? .systemRed : .secondaryLabelColor
         arrangeStatus.stringValue = model.arrangeStatus
-        updatesToggle.state = model.updates.automaticChecks ? .on : .off
+        updatesToggle.state = model.updater.automaticChecks ? .on : .off
         for (action, button) in shortcutButtons where action != recording {
             button.title = action.shortcutDescription
         }
@@ -139,7 +139,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let updatesRow = NSStackView(views: [updatesToggle, checkNow])
         updatesRow.orientation = .horizontal
         stack.addArrangedSubview(updatesRow)
-        stack.addArrangedSubview(small(L("Version \(UpdateChecker.currentVersion)", "版本 \(UpdateChecker.currentVersion)")))
+        stack.addArrangedSubview(small(L("Version \(Updater.currentVersion)", "版本 \(Updater.currentVersion)")))
 
         stack.addArrangedSubview(header(L("Smart Arrange", "智能排列")))
         jevField.placeholderString = L("Paste your TypeSafe key", "粘贴 TypeSafe Key")
@@ -309,11 +309,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func toggleUpdates() {
-        model.updates.automaticChecks = updatesToggle.state == .on
+        model.updater.automaticChecks = updatesToggle.state == .on
     }
 
     @objc private func checkForUpdates() {
-        model.checkForUpdatesNow()
+        model.updater.checkNow()
     }
 
     @objc private func languageChanged() {

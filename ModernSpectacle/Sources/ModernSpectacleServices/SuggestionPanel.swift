@@ -50,8 +50,8 @@ public final class SuggestionPanel {
         let stack = NSStackView(views: [label, buttons])
         stack.orientation = .vertical
         stack.alignment = .trailing
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 16, bottom: 12, right: 16)
+        stack.spacing = 12
+        let content = NSView.padding(stack, NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20))
 
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 100),
@@ -65,9 +65,9 @@ public final class SuggestionPanel {
         panel.level = .floating
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.contentView = stack
+        panel.contentView = content
         panel.layoutIfNeeded()
-        let size = stack.fittingSize
+        let size = content.fittingSize
         panel.setContentSize(size)
 
         // Top-right corner of the display the windows are on. AX coordinates are top-left based; AppKit's are bottom-left.
@@ -114,5 +114,22 @@ public final class SuggestionPanel {
         if notify {
             callback?()
         }
+    }
+}
+
+extension NSView {
+    /// `view` inside a container with these margins. A stack view's own edgeInsets are ignored when it is a panel's
+    /// content view, which left the text touching the panel's edges.
+    static func padding(_ view: NSView, _ insets: NSEdgeInsets) -> NSView {
+        let container = NSView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: container.topAnchor, constant: insets.top),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: insets.left),
+            view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -insets.right),
+            view.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -insets.bottom),
+        ])
+        return container
     }
 }
