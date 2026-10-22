@@ -1,3 +1,43 @@
+English · 中文见下方
+
+ModernSpectacle is a menu bar window manager for macOS. Press one key and it arranges every window on your screen into a layout built around what you are doing right now, following rules that human–computer interaction research has shown to work. It also keeps all of the classic Spectacle shortcuts (halves, corners, thirds, moving between displays). It is made for people who keep many windows open, use large or ultrawide displays, and like the keyboard.
+
+Why these layouts: every rule comes from research
+• The main window sits in the center of your view. Bi and Balakrishnan (CHI 2009) recorded a week of real work on large displays: 81% of mouse activity happened in the central area. People used the middle as the "focus area" for the main task, put mail and chat around the edges, and kept related windows closer. The ultrawide layout does exactly this: main in the middle, task windows on one side, windows to keep an eye on on the other.
+• One key brings a side window to the center. The same study found the most common action was dragging a side app to the middle and back, and recommended a one-step "move to focus area". That is Bring to Main, ⌃⌥⌘↩.
+• Windows for the current task are tiled, not stacked. Kandogan and Shneiderman's Elastic Windows study (1997) showed that with 6 to 12 windows, grouped tiling was clearly faster than overlapping windows, up to 10 times faster on some tasks.
+• Windows you keep an eye on stay visible. Hutchings and Stasko (GI 2004) found that half of the people they interviewed deliberately left a corner of a covered window showing as a reminder. On large displays a right-hand column holds chat, mail and monitors, fully readable; everything else waits whole behind the tiles, with no slivers.
+• Your layout does not jump around. When interface elements move, people have to learn their positions again (Scarr, Cockburn and Gutwin's review of spatial memory). So arranging again keeps the template you chose last time, recognizes windows whose titles changed, and only fills free slots or the background with new windows.
+• AI only decides which windows matter; positions and sizes are computed on your Mac. In DuoZone's 16-person study (2025), letting AI make the semantic call while sizes were computed locally made layout tasks 34.5% faster with clearly lower mental load; the same study found AI-chosen sizes were close to random. ModernSpectacle goes further: the model only ranks windows, templates and sizes are computed locally, and readability floors (browsers at least 640 points wide) keep windows out of slots too small for them.
+• Layouts you can save. DuoZone and a 2026 mixed-reality placement study both found people want to save favorite layouts and bring them back in one step. That is ⌃⌥⌘1…9.
+
+Features
+• Smart Arrange, ⌃⌥⌘M (hold ⌃⌥⌘ with the left hand, press M with the right): a small preview shows the layout while Jev, TypeSafe's decision model, works out from your focus and recent switches which windows belong to the current task and which you only keep an eye on. It answers in about 0.2 seconds. Let go to apply, Esc to cancel. Keep holding and press M again to switch templates: laptop "Main · Two on the right", "Two columns", "One window"; standard monitor "Main · Two on the right", "Two columns", "Grid"; ultrawide "Left · Main · Right column", "Left · Two main · Right column", "Grid"; portrait "Main · Two below", "Two rows", "One window".
+• Only the display you are working on is arranged.
+• Bring to Main, ⌃⌥⌘↩: swaps the current window into the main slot and moves the old main window into the slot it left. Done locally, no model call.
+• Saved layouts: Save Layout… in the menu names the current arrangement; ⌃⌥⌘1…9 brings it back, finding windows by app and title and moving them back to their display.
+• Learns your habits: if you move windows after an arrangement it remembers; if you spread out several windows of one app by hand, it offers to do the rest.
+• Classic shortcuts: ⌥⌘←/→/↑/↓ halves, ⌃⌘←/→ and ⌃⇧⌘←/→ corners, ⌥⌘C center, ⌥⌘F maximize, ⌃⌥←/→ thirds, ⌃⌥⌘←/→ next and previous display, ⌃⌥⇧←/→ larger and smaller, ⌥⌘Z / ⌥⇧⌘Z undo and redo. Every shortcut can be changed in Settings.
+• English and Chinese, following the system by default; switch in Settings.
+• Updates itself: it checks this store once a day and, when you agree, downloads the new version, verifies its signature, replaces itself and relaunches. Automatic checks can be turned off in Settings.
+• Privacy: each Smart Arrange sends app names, window titles and recent window switches to TypeSafe to rank them; window positions are never sent, and nothing is sent when you are not pressing the shortcut. Offline, or when TypeSafe does not answer in time, windows are ranked on your Mac by focus and recent use.
+
+Requirements
+macOS 14 or later, Apple silicon or Intel. Smart Arrange needs an internet connection.
+
+Getting started
+1. Open the dmg, drag ModernSpectacle into Applications, and open it.
+2. The first time, turn on ModernSpectacle in System Settings → Privacy & Security → Accessibility. Moving other apps' windows needs this permission.
+3. Press ⌃⌥⌘M to arrange the current display.
+
+Known limitations
+• Settings from the original Spectacle are not imported.
+• Copies of 0.3.1 and earlier cannot update themselves; install 0.3.2 or later once, and it updates itself from then on.
+
+—————————————————————
+
+中文
+
 ModernSpectacle 是一个 macOS 菜单栏窗口管理工具。按一个键，它根据你此刻在做的事，把所有窗口排成人机交互研究证明更高效的布局；也保留经典 Spectacle 的全部快捷键（半屏、四角、三分之一、跨屏）。适合同时开着很多窗口、用大屏或超宽屏、习惯用键盘的人。
 
 为什么这样排：每条规则背后都有研究
@@ -10,18 +50,18 @@ ModernSpectacle 是一个 macOS 菜单栏窗口管理工具。按一个键，它
 • 能保存的布局。DuoZone 和 2026 年的混合现实摆放研究都发现，用户希望把常用布局存成预设、一键恢复。⌃⌥⌘1…9 就是这个功能。
 
 主要功能
-• 智能排列 ⌃⌥⌘M（左手按住 ⌃⌥⌘，右手按 M）：Jev（TypeSafe 的决策模型）根据焦点和最近的切换，判断哪些窗口属于当前任务、哪些只需留意，一次请求约一秒，本机再按这个顺序填进模版。不松开 ⌃⌥⌘ 再按 M，可以在三种模版之间切换，瞬间完成：笔记本是「左主·右上下」「左右两栏」「单窗口」，普通显示器是「左主·右上下」「两栏」「2×2 平铺」，超宽屏是「左1·中1·右n」「左1·中2·右n」「3×2 平铺」
-• 隐私：每次智能排列会把应用名、窗口标题和最近的窗口切换发给 TypeSafe 判断，窗口位置不发送；不按快捷键时什么都不发送。断网或 TypeSafe 没有及时回答时，按焦点和最近使用在本机排序
-• 快捷键都可以在设置里改
-• 移到主位 ⌃⌥⌘↩：把当前窗口换到中央主位，原来的主窗口退到它腾出的位置，本地完成，不调模型
+• 智能排列 ⌃⌥⌘M（左手按住 ⌃⌥⌘，右手按 M）：先弹出小地图预览布局，同时 Jev（TypeSafe 的决策模型）根据焦点和最近的切换，判断哪些窗口属于当前任务、哪些只需留意，约 0.2 秒返回。松手生效，Esc 取消。不松开 ⌃⌥⌘ 再按 M，可以切换模版：笔记本是「左主·右上下」「左右两栏」「单窗口」，普通显示器是「左主·右上下」「左右两栏」「平铺」，超宽屏是「左1·中1·右n」「左1·中2·右n」「平铺」，竖屏是「上主·下两格」「上下两栏」「单窗口」
+• 只排列你正在用的那块屏幕
+• 移到主位 ⌃⌥⌘↩：把当前窗口换到主位，原来的主窗口退到它腾出的位置，本地完成，不调用模型
 • 保存布局：菜单里「保存布局…」给当前排列起名，⌃⌥⌘1…9 一键恢复。按应用和窗口标题找回窗口，跨屏也会移回去
 • 学习你的习惯：排完你再挪动，它会记住；你手动把一个 App 的几个窗口铺开，它会主动问要不要把剩下的也铺上
-• 经典快捷键：⌥⌘←/→/↑/↓ 半屏，⌃⌘←/→、⌃⇧⌘←/→ 四角，⌥⌘C 居中，⌥⌘F 最大化，⌃⌥←/→ 三分之一，⌃⌥⌘←/→ 跨屏，⌃⌥⇧←/→ 放大缩小，⌥⌘Z / ⌥⇧⌘Z 撤销重做
+• 经典快捷键：⌥⌘←/→/↑/↓ 半屏，⌃⌘←/→、⌃⇧⌘←/→ 四角，⌥⌘C 居中，⌥⌘F 最大化，⌃⌥←/→ 三分之一，⌃⌥⌘←/→ 跨屏，⌃⌥⇧←/→ 放大缩小，⌥⌘Z / ⌥⇧⌘Z 撤销重做。所有快捷键都可以在设置里改
 • 中英双语界面，默认跟随系统，可在设置里切换
-• 新版本提示：每天检查一次本商店，有新版本时提示并提供下载链接，可在设置里关闭
+• 自动更新：每天检查一次本商店，你同意后自动下载新版本、校验签名、原地替换并重启。可在设置里关闭自动检查
+• 隐私：每次智能排列会把应用名、窗口标题和最近的窗口切换发给 TypeSafe 判断，窗口位置不发送；不按快捷键时什么都不发送。断网或 TypeSafe 没有及时回答时，按焦点和最近使用在本机排序
 
 系统要求
-macOS 14 或更高版本，支持 Apple Silicon 和 Intel 芯片。智能排列需要联网。
+macOS 14 或更高版本，支持 Apple 芯片和 Intel 芯片。智能排列需要联网。
 
 开始使用
 1. 打开 dmg，把 ModernSpectacle 拖进「应用程序」文件夹，然后打开它。
@@ -29,14 +69,16 @@ macOS 14 或更高版本，支持 Apple Silicon 和 Intel 芯片。智能排列�
 3. 按 ⌃⌥⌘M 排列当前屏幕。
 
 已知限制
-• 新版本需要从提示里的链接下载安装，不会自动更新。
 • 不会导入原版 Spectacle 的设置。
+• 0.3.1 及更早的版本不能自动更新；手动装一次 0.3.2 或更新的版本，之后就会自动更新。
 
-参考文献
+—————————————————————
+
+References · 参考文献
 • Bi, X., Balakrishnan, R. Comparing Usage of a Large High-Resolution Display to Single or Dual Desktop Displays for Daily Work. CHI 2009.
 • Kandogan, E., Shneiderman, B. Elastic Windows: Evaluation of Multi-Window Operations. CHI 1997.
 • Hutchings, D. R., Stasko, J. Revisiting Display Space Management: Understanding Current Practice to Inform Next-generation Design. GI 2004.
 • Scarr, J., Cockburn, A., Gutwin, C. Supporting and Exploiting Spatial Memory in User Interfaces. Foundations and Trends in HCI.
-• DuoZone, arXiv 2511.15676（2025）。
+• DuoZone, arXiv 2511.15676 (2025).
 
-源代码：https://github.com/modenl/spectacle
+Source code · 源代码: https://github.com/modenl/spectacle
