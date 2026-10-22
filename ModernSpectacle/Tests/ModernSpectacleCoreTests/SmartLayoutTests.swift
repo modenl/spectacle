@@ -262,8 +262,33 @@ struct SmartLayoutTests {
         #expect(fromSlot.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "left-top", window: 1)])
         let fromStack = LayoutTemplates.promoted(choice, focusedID: 4)
         #expect(fromStack.slots.first { $0.slot == "main" }?.window == 4)
-        #expect(fromStack.stack == [1, 3]) // old main goes to the front of the stack
+        // The old main stays in view in the slot next to main (left-top on wide-center); its occupant goes to the stack.
+        #expect(fromStack.slots.first { $0.slot == "left-top" }?.window == 1)
+        #expect(fromStack.stack == [2, 3])
         #expect(LayoutTemplates.promoted(choice, focusedID: 1) == choice)
+    }
+
+    @Test
+    func promotionOnALaptopSwapsWithTheSecondWindow() {
+        // Claude main, iTerm on the side, Chrome hidden behind. Bring Chrome to main: Claude moves to the side slot,
+        // iTerm goes behind.
+        let side = DisplayChoice(id: 0, template: "small-main-side", slots: [TemplateAssignment(slot: "main", window: 7), TemplateAssignment(slot: "side", window: 3)], stack: [6, 4])
+        let promoted = LayoutTemplates.promoted(side, focusedID: 6)
+        #expect(promoted.slots == [TemplateAssignment(slot: "main", window: 6), TemplateAssignment(slot: "side", window: 7)])
+        #expect(promoted.stack == [3, 4])
+
+        let twoColumns = DisplayChoice(id: 0, template: "small-2col", slots: [TemplateAssignment(slot: "main", window: 7), TemplateAssignment(slot: "second", window: 3)], stack: [6])
+        #expect(LayoutTemplates.promoted(twoColumns, focusedID: 6).slots.first { $0.slot == "second" }?.window == 7)
+
+        // Monocle has no other slot: the old main goes behind, first in line.
+        let monocle = DisplayChoice(id: 0, template: "small-monocle", slots: [TemplateAssignment(slot: "main", window: 7)], stack: [6, 3])
+        let alone = LayoutTemplates.promoted(monocle, focusedID: 3)
+        #expect(alone.slots == [TemplateAssignment(slot: "main", window: 3)])
+        #expect(alone.stack == [7, 6])
+
+        // An empty side slot is simply filled.
+        let empty = DisplayChoice(id: 0, template: "small-main-side", slots: [TemplateAssignment(slot: "main", window: 7)], stack: [6])
+        #expect(LayoutTemplates.promoted(empty, focusedID: 6).slots == [TemplateAssignment(slot: "main", window: 6), TemplateAssignment(slot: "side", window: 7)])
     }
 
     @Test

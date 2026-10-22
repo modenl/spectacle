@@ -229,15 +229,19 @@ public final class SmartArranger {
                 var retried = 0
                 for placement in plan.placements {
                     guard let window = entriesByID[placement.id]?.window, let actual = window.frame else { continue }
-                    let target = placement.rect
+                    // A window bigger than planned is at its app's minimum: aim for its own size, kept inside the display.
+                    var target = placement.rect
+                    if actual.width > target.width + 2 || actual.height > target.height + 2,
+                       let display = displays.first(where: { $0.visibleFrame.contains(CGPoint(x: target.midX, y: target.midY)) })?.visibleFrame {
+                        target.size = CGSize(width: max(target.width, actual.width), height: max(target.height, actual.height))
+                        target.origin.x = max(display.minX, min(target.minX, display.maxX - target.width))
+                        target.origin.y = max(display.minY, min(target.minY, display.maxY - target.height))
+                    }
                     let off = abs(actual.minX - target.minX) > 4 || abs(actual.minY - target.minY) > 4
                         || abs(actual.width - target.width) > 4 || abs(actual.height - target.height) > 4
-                    // Larger than planned is an app minimum, handled by keepInsideDisplay; only fix what fell short or moved.
-                    let atMinimum = actual.width > target.width + 2 || actual.height > target.height + 2
-                    guard off, !atMinimum else { continue }
+                    guard off else { continue }
                     suppressObservationUntil = Date().addingTimeInterval(2)
                     window.setFrame(target)
-                    keepInsideDisplay(window, planned: target, displays: displays)
                     retried += 1
                 }
                 if retried == 0 { return }
@@ -523,18 +527,13 @@ public final class SmartArranger {
         }
     }
 
-    /// Previous choices translated to the ids in `windows`; windows that are gone simply drop out.
+    /// Previous choices translated to the ids in `windows`; windows that are gone simply drop out. Matching falls back
+    /// from the exact title to the app, since terminal and browser titles change between arranging and the next key press.
     private func previousChoices(for windows: [WindowInfo]) -> [DisplayChoice] {
-        let idOf = Dictionary(windows.map { ($0.key, $0.id) }, uniquingKeysWith: { a, _ in a })
-        return lastChoices.map { displayID, stored in
-            DisplayChoice(
-                id: displayID,
-                template: stored.template,
-                slots: stored.slots.compactMap { s in idOf[s.key].map { TemplateAssignment(slot: s.slot, window: $0) } },
-                stack: stored.stack.compactMap { idOf[$0] },
-                cascade: stored.cascade.compactMap { idOf[$0] }
-            )
-        }.sorted { $0.id < $1.id }
+        let stored = lastChoices.sorted { $0.key < $1.key }.map { displayID, s in
+            (display: displayID, template: s.template, slots: s.slots, stack: s.stack, cascade: s.cascade)
+        }
+        return LayoutTemplates.choices(fromKeys: stored, in: windows)
     }
 
     /// Bring the focused window into the main slot of its display, pushing the previous main window to where the
@@ -553,7 +552,7 @@ public final class SmartArranger {
         }
 
         let request = makeRequest(from: snapshot, now: now)
-        let choice = LayoutTemplates.promoted(previous, focusedID: focused.id)
+        let choice = LayoutTemplates.fitted(LayoutTemplates.promoted(previous, focusedID: focused.id), for: makeRequest(from: snapshot, now: now))
         let plan = LayoutTemplates.design(from: TemplatePlan(summary: L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"), notes: history.notes, displays: [choice]), for: request)
         var composed = LayoutComposer.plan(from: plan, for: request)
         composed.choices = [choice]

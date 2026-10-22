@@ -275,3 +275,52 @@ struct LaptopLayoutTests {
         #expect(plan.placements.first { $0.id == 2 }?.group == "peek")
     }
 }
+
+@Suite
+struct PromotionMatchingTests {
+    private let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 33, width: 1512, height: 871), isMain: true)
+
+    private func window(_ id: Int, _ bundle: String, _ title: String, _ kind: AppKind, focused: Bool = false) -> WindowInfo {
+        WindowInfo(id: id, app: bundle, bundleID: bundle, kind: kind, title: title, frame: CGRect(x: 0, y: 33, width: 700, height: 600), displayID: 0, isFocused: focused, appActiveSecondsAgo: nil)
+    }
+
+    @Test
+    func aTerminalWhoseTitleChangedIsStillTheSideWindow() {
+        // Arranged with iTerm titled "-zsh"; by the time Bring to Main is pressed it is running a command.
+        let stored = [(display: 0, template: "small-main-side", slots: [(slot: "main", key: "claude|Claude"), (slot: "side", key: "iterm|-zsh")], stack: ["chrome|Docs"], cascade: [String]())]
+        let now = [window(1, "claude", "Claude", .coding), window(2, "iterm", "swift test — ModernSpectacle", .coding, focused: true), window(3, "chrome", "Docs", .browser)]
+        let previous = LayoutTemplates.choices(fromKeys: stored, in: now)
+        #expect(previous[0].slots == [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side", window: 2)])
+
+        // So promoting it is a swap: Claude goes to the side, not to the background.
+        let promoted = LayoutTemplates.promoted(previous[0], focusedID: 2)
+        #expect(promoted.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "side", window: 1)])
+        #expect(promoted.stack == [3])
+    }
+
+    @Test
+    func ambiguousTitlesAreNotGuessed() {
+        // Two stored Chrome windows, both retitled, two open: each still finds one, nothing is dropped or doubled.
+        let stored = [(display: 0, template: "small-2col", slots: [(slot: "main", key: "chrome|A"), (slot: "second", key: "chrome|B")], stack: [String](), cascade: [String]())]
+        let now = [window(1, "chrome", "A", .browser), window(2, "chrome", "C", .browser)]
+        let previous = LayoutTemplates.choices(fromKeys: stored, in: now)
+        #expect(previous[0].slots == [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "second", window: 2)])
+    }
+
+    @Test
+    func aBrowserSwappedToTheSideGetsTheWiderTwoColumnLayout() {
+        // Chrome was main, iTerm on the narrow side; bringing iTerm to main puts Chrome on a 529-point side: too narrow.
+        var req = LayoutRequest(displays: [laptop], windows: [window(1, "chrome", "Docs", .browser), window(2, "iterm", "zsh", .coding, focused: true)], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 2
+        let previous = DisplayChoice(id: 0, template: "small-main-side", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side", window: 2)])
+        let fitted = LayoutTemplates.fitted(LayoutTemplates.promoted(previous, focusedID: 2), for: req)
+        #expect(fitted.template == "small-2col")
+        #expect(fitted.slots == [TemplateAssignment(slot: "main", window: 2), TemplateAssignment(slot: "second", window: 1)])
+        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [fitted]), for: req)
+        #expect(plan.placements.first { $0.id == 1 }?.group == "column2") // Chrome stays visible
+
+        // A terminal on the side fits as it is: no template change.
+        let fine = DisplayChoice(id: 0, template: "small-main-side", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side", window: 2)])
+        #expect(LayoutTemplates.fitted(fine, for: req) == fine)
+    }
+}

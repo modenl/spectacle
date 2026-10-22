@@ -186,20 +186,92 @@ public enum LayoutTemplates {
 
     // MARK: Reusing a plan
 
-    /// Choices made for one snapshot, re-expressed for another: windows are matched by key ("bundleID|title"); windows
-    /// that are gone drop out. Window ids are only stable within one snapshot.
-    public static func translate(_ choices: [DisplayChoice], from old: [WindowInfo], to new: [WindowInfo]) -> [DisplayChoice] {
-        let keyOf = Dictionary(old.map { ($0.id, $0.key) }, uniquingKeysWith: { a, _ in a })
-        let idOf = Dictionary(new.map { ($0.key, $0.id) }, uniquingKeysWith: { a, _ in a })
-        func map(_ id: Int) -> Int? { keyOf[id].flatMap { idOf[$0] } }
-        return choices.map { choice in
+    /// Stored window keys ("bundleID|title") to the ids of the windows open now. Exact key first; then any window of the
+    /// same app that is still unmatched, because titles change all the time (a terminal's follows the directory and the
+    /// running command, a browser's follows the tab). Keys are matched in the order given, so put the important ones
+    /// (main, then the other slots) first.
+    public static func match(keys: [String], in windows: [WindowInfo]) -> [String: Int] {
+        var result: [String: Int] = [:]
+        var used = Set<Int>()
+        for key in keys where result[key] == nil {
+            if let window = windows.first(where: { $0.key == key && !used.contains($0.id) }) {
+                result[key] = window.id
+                used.insert(window.id)
+            }
+        }
+        for key in keys where result[key] == nil {
+            let bundleID = String(key.split(separator: "|", maxSplits: 1).first ?? "")
+            let unmatchedKeysOfApp = keys.filter { $0.hasPrefix(bundleID + "|") && result[$0] == nil }
+            // Only when it is unambiguous which stored window became which open one.
+            let candidates = windows.filter { $0.bundleID == bundleID && !used.contains($0.id) }
+                .sorted { ($0.lastFocusedSecondsAgo ?? .max, $0.id) < ($1.lastFocusedSecondsAgo ?? .max, $1.id) }
+            if candidates.count == 1 || unmatchedKeysOfApp.count == 1, let window = candidates.first {
+                result[key] = window.id
+                used.insert(window.id)
+            }
+        }
+        return result
+    }
+
+    /// Stored choices (windows as keys) expressed with the ids of the windows open now; windows that are gone drop out.
+    public static func choices(fromKeys stored: [(display: Int, template: String, slots: [(slot: String, key: String)], stack: [String], cascade: [String])], in windows: [WindowInfo]) -> [DisplayChoice] {
+        let ordered = stored.flatMap { d in d.slots.sorted { ($0.slot == "main" ? 0 : 1) < ($1.slot == "main" ? 0 : 1) }.map(\.key) }
+            + stored.flatMap { $0.stack + $0.cascade }
+        let idOf = match(keys: ordered, in: windows)
+        return stored.map { d in
             DisplayChoice(
-                id: choice.id, template: choice.template,
-                slots: choice.slots.compactMap { a in map(a.window).map { TemplateAssignment(slot: a.slot, window: $0) } },
-                stack: choice.stack.compactMap(map),
-                cascade: choice.cascade.compactMap(map)
+                id: d.display, template: d.template,
+                slots: d.slots.compactMap { s in idOf[s.key].map { TemplateAssignment(slot: s.slot, window: $0) } },
+                stack: d.stack.compactMap { idOf[$0] },
+                cascade: d.cascade.compactMap { idOf[$0] }
             )
         }
+    }
+
+    /// Choices made for one snapshot, re-expressed for another. Window ids are only stable within one snapshot.
+    public static func translate(_ choices: [DisplayChoice], from old: [WindowInfo], to new: [WindowInfo]) -> [DisplayChoice] {
+        let keyOf = Dictionary(old.map { ($0.id, $0.key) }, uniquingKeysWith: { a, _ in a })
+        let stored = choices.map { c in
+            (display: c.id, template: c.template,
+             slots: c.slots.compactMap { a in keyOf[a.window].map { (slot: a.slot, key: $0) } },
+             stack: c.stack.compactMap { keyOf[$0] },
+             cascade: c.cascade.compactMap { keyOf[$0] })
+        }
+        return LayoutTemplates.choices(fromKeys: stored, in: new)
+    }
+
+    /// When a window does not fit the slot it is in (a browser swapped next to main on a laptop), switch to a sibling
+    /// template of the same shape whose slots are wide enough, instead of letting it fall into the background.
+    /// Slots map by position. Keeps the choice as it is when it fits, or when no sibling does better.
+    public static func fitted(_ choice: DisplayChoice, for request: LayoutRequest) -> DisplayChoice {
+        guard let display = request.displays.first(where: { $0.id == choice.id }),
+              let current = template(id: choice.template) else { return choice }
+        let kindOf = Dictionary(request.windows.map { ($0.id, $0.kind) }, uniquingKeysWith: { a, _ in a })
+        func shape(_ t: LayoutTemplate) -> [Int] { t.columns.filter { !$0.isStack }.map(\.slots.count) }
+        func misfits(_ t: LayoutTemplate, _ slots: [TemplateAssignment]) -> Int {
+            let total = t.columns.map(\.share).reduce(0, +)
+            var count = 0
+            for column in t.columns where !column.isStack {
+                let width = display.visibleFrame.width * CGFloat(column.share / total)
+                for slot in column.slots {
+                    guard let id = slots.first(where: { $0.slot == slot.id })?.window, let kind = kindOf[id] else { continue }
+                    if width < minimumWidth(for: kind) { count += 1 }
+                }
+            }
+            return count
+        }
+        let original = misfits(current, choice.slots)
+        guard original > 0 else { return choice }
+        var best = (choice, original)
+        for sibling in candidates(for: display) where sibling.id != current.id && shape(sibling) == shape(current) && sibling.hasStack == current.hasStack {
+            let rename = Dictionary(uniqueKeysWithValues: zip(current.slotIDs, sibling.slotIDs))
+            var candidate = choice
+            candidate.template = sibling.id
+            candidate.slots = choice.slots.compactMap { a in rename[a.slot].map { TemplateAssignment(slot: $0, window: a.window) } }
+            let score = misfits(sibling, candidate.slots)
+            if score < best.1 { best = (candidate, score) }
+        }
+        return best.0
     }
 
     /// The whole local pipeline from the model's choice to frames, using the request's current focus. Run at apply time,
@@ -212,22 +284,46 @@ public enum LayoutTemplates {
 
     // MARK: Stability and promotion
 
-    /// Swap the focused window into "main" of the display's last choice, sending the previous main window to the
-    /// focused window's old slot (or the stack). This is the "bring a peripheral app into the focal region" operation.
+    /// Swap the focused window into "main" of the display's last choice. This is the "bring a peripheral app into the
+    /// focal region" operation; people use the app there briefly and then go back (Bi & Balakrishnan 2009), so the
+    /// window that was main stays in view:
+    /// - focused window was in a slot: it and the old main trade places;
+    /// - focused window was in the background: the old main takes the slot nearest to main, and whatever sat there
+    ///   goes to the front of the background.
     public static func promoted(_ choice: DisplayChoice, focusedID: Int) -> DisplayChoice {
         var result = choice
         guard let mainIndex = result.slots.firstIndex(where: { $0.slot == "main" }) else { return result }
         if result.slots[mainIndex].window == focusedID { return result }
         let previousMain = result.slots[mainIndex].window
-        if let oldIndex = result.slots.firstIndex(where: { $0.window == focusedID }) {
-            result.slots[oldIndex].window = previousMain
-        } else {
-            result.stack.removeAll { $0 == focusedID }
-            result.cascade.removeAll { $0 == focusedID }
-            result.stack.insert(previousMain, at: 0)
-        }
         result.slots[mainIndex].window = focusedID
+        if let oldIndex = result.slots.firstIndex(where: { $0.window == focusedID && $0.slot != "main" }) {
+            result.slots[oldIndex].window = previousMain
+            return result
+        }
+        result.stack.removeAll { $0 == focusedID }
+        result.cascade.removeAll { $0 == focusedID }
+        guard let nearest = template(id: choice.template).flatMap(nearestSlotToMain) else {
+            result.stack.insert(previousMain, at: 0)
+            return result
+        }
+        if let occupied = result.slots.firstIndex(where: { $0.slot == nearest }) {
+            result.stack.insert(result.slots[occupied].window, at: 0)
+            result.slots[occupied].window = previousMain
+        } else {
+            result.slots.append(TemplateAssignment(slot: nearest, window: previousMain))
+        }
         return result
+    }
+
+    /// The slot next to main: "second" when the template has one, otherwise the top slot of the closest column,
+    /// the left one on a tie (the side for what the task needs).
+    static func nearestSlotToMain(in template: LayoutTemplate) -> String? {
+        if template.slotIDs.contains("second") { return "second" }
+        guard let mainColumn = template.columns.firstIndex(where: { $0.slots.contains { $0.id == "main" } }) else { return nil }
+        return template.columns.indices
+            .filter { $0 != mainColumn && !template.columns[$0].isStack && !template.columns[$0].slots.isEmpty }
+            .min { (abs($0 - mainColumn), $0) < (abs($1 - mainColumn), $1) }
+            .map { template.columns[$0].slots[0].id }
     }
 
     // MARK: Filling a template
