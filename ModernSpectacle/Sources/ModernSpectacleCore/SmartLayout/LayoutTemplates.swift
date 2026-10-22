@@ -376,8 +376,10 @@ public enum LayoutTemplates {
             let fits = { (w: WindowInfo) in slot.id == "main" || width(of: slot) >= readableWidth(of: w, in: request) }
             let role = { (w: WindowInfo) in w.id == request.focusedWindowID ? .task : (roleOf[w.id] ?? .task) }
             let preferred: WindowRole = slot.awareness ? .awareness : .task
+            // Main is never left empty while the display has a window: with nothing else, the most relevant one takes it.
             let pick = remaining.firstIndex { role($0) == preferred && fits($0) }
                 ?? remaining.firstIndex { role($0) != .background && fits($0) }
+                ?? (slot.id == "main" ? remaining.indices.first : nil)
             guard let index = pick else { continue }
             slots.append(TemplateAssignment(slot: slot.id, window: remaining.remove(at: index).id))
         }

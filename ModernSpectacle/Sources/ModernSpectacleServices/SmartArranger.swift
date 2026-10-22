@@ -51,10 +51,25 @@ public final class SmartArranger {
     private var windowFocus: [String: Date] = [:]
     /// The model's last ranking with the windows it was computed for, reused while the set of windows is the same.
     private var cachedRanking: (signature: String, ranking: WindowRanking, windows: [WindowInfo], date: Date)?
-    /// Pressing Smart Arrange again before the modifiers are let go switches template on that display.
-    private var cycle: (displayID: Int, index: Int, lastPress: Date)?
-    private var modifiersHeld = false
+    /// A Smart Arrange press in progress: the preview is up, the windows have not moved yet. Pressing M again switches
+    /// template; letting go of the modifiers applies; Esc cancels.
+    private struct Session {
+        var id = UUID()
+        var snapshot: WindowEnumerator.Snapshot
+        var request: LayoutRequest
+        var ranking: WindowRanking
+        /// Index into the display's templates, per display.
+        var templateIndex: [Int: Int]
+        var focusedDisplay: Int
+        var started: Date
+        var calledModel: Bool
+        /// The model's ranking while it is still on its way; the preview starts from the local one.
+        var pendingRanking: Task<WindowRanking, Never>?
+    }
+    private var session: Session?
+    private let preview = ArrangementPreview()
     private var flagsMonitors: [Any] = []
+    private var escapeMonitors: [Any] = []
     private var prewarmTask: Task<Void, Never>?
     private var restackTask: Task<Void, Never>?
     private var settleTask: Task<Void, Never>?
@@ -99,10 +114,10 @@ public final class SmartArranger {
                 Task { @MainActor in self?.schedulePrewarm() }
             })
         }
-        // Letting go of every modifier ends a template cycle; the next press arranges afresh.
+        // Letting go of every modifier applies the previewed arrangement.
         let flagsChanged: (NSEvent) -> Void = { [weak self] event in
             let held = !event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty
-            Task { @MainActor in if !held { self?.modifiersHeld = false } }
+            Task { @MainActor in if !held { await self?.commitPreview() } }
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flagsChanged) { flagsMonitors.append(global) }
         if let local = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { flagsChanged($0); return $0 }) { flagsMonitors.append(local) }
@@ -146,88 +161,194 @@ public final class SmartArranger {
 
     // MARK: - Arrange
 
-    /// The Smart Arrange key. A first press arranges every display; pressing again while the modifiers are still held
-    /// switches the focused display to its next template.
-    public func smartArrangeKey() {
-        let now = Date()
-        if let cycle, modifiersHeld, now.timeIntervalSince(cycle.lastPress) < 15 {
-            cycleTemplate(on: cycle.displayID, from: cycle.index, now: now)
-        } else {
-            Task { await arrange() }
+    /// The Smart Arrange key. The first press shows the arrangement as a preview; pressing it again while the modifiers
+    /// are held switches the focused display to its next template; letting go applies, Esc cancels. With no modifier
+    /// held (a quick tap, or `holding: false` from the developer trigger) it applies straight away.
+    public func smartArrangeKey(holding: Bool? = nil) {
+        if session != nil {
+            nextTemplate()
+            return
         }
-        modifiersHeld = true
+        guard beginPreview() else { return }
+        let held = holding ?? !NSEvent.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty
+        if !held { Task { await commitPreview() } }
     }
 
-    /// Forget an ongoing template cycle (the developer trigger has no modifiers to let go of).
-    public func endCycle() {
-        cycle = nil
-        modifiersHeld = false
-    }
-
+    /// Arrange without a preview pause (the developer trigger, and Bring to Main with nothing arranged yet).
     public func arrange() async {
+        cancelPreview()
+        guard beginPreview() else { return }
+        await commitPreview()
+    }
+
+    /// Snapshot, ranking (cached or local now, the model's when it arrives) and the preview. Nothing moves yet.
+    @discardableResult
+    private func beginPreview() -> Bool {
         Self.log("arrange requested (ranker: \(activeRanker?.name ?? "local"), accessibility: \(AccessibilityPermission.isTrusted))")
         guard AccessibilityPermission.isTrusted else {
             update(L("Accessibility permission required", "需要辅助功能权限"), planner: nil)
-            return
+            return false
         }
-
         let started = Date()
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: started)
         let request = makeRequest(from: snapshot, now: started)
         guard !request.windows.isEmpty else {
             update(L("No windows to arrange", "没有可排列的窗口"), planner: nil)
-            return
+            return false
         }
-
         lastRequest = request
-        let willCallModel = activeRanker != nil && !hasFreshRanking(for: request.signature)
-        if willCallModel { onBusyChange?(true, L("Ranking windows…", "正在判断窗口…")) }
-        let ranking = await ranking(for: request, allowNetwork: true)
+        let needsModel = activeRanker != nil && !hasFreshRanking(for: request.signature)
+        let focusedDisplay = request.windows.first { $0.id == request.focusedWindowID }?.displayID ?? request.displays.first { $0.isMain }?.id ?? 0
+        var templateIndex: [Int: Int] = [:]
+        for display in request.displays {
+            let templates = LayoutTemplates.candidates(for: display)
+            let remembered = history.templateChoice[LayoutTemplates.sizeClass(of: display)]
+            templateIndex[display.id] = templates.firstIndex { $0.id == remembered } ?? 0
+        }
+        var current = Session(snapshot: snapshot, request: request, ranking: cachedOrLocalRanking(for: request), templateIndex: templateIndex,
+                              focusedDisplay: focusedDisplay, started: started, calledModel: needsModel)
+        if needsModel {
+            let id = current.id
+            current.pendingRanking = Task { @MainActor [weak self] in
+                guard let self else { return LocalRanker.rank(request) }
+                let ranking = await ranking(for: request, allowNetwork: true)
+                // The model's answer arrived while the preview is still up: the cards glide to the better layout.
+                if session?.id == id {
+                    session?.ranking = ranking
+                    showPreview(morphing: true)
+                }
+                return ranking
+            }
+        }
+        session = current
+        watchEscape()
+        showPreview(morphing: false)
+        Self.log("preview up in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        return true
+    }
+
+    private func nextTemplate() {
+        guard var current = session, let display = current.request.displays.first(where: { $0.id == current.focusedDisplay }) else { return }
+        let count = LayoutTemplates.candidates(for: display).count
+        current.templateIndex[display.id] = ((current.templateIndex[display.id] ?? 0) + 1) % count
+        session = current
+        showPreview(morphing: true)
+    }
+
+    /// The plan the session would apply right now: every display's template filled from the ranking.
+    private func plan(of current: Session) -> (choices: [DisplayChoice], plan: LayoutPlan) {
+        let request = current.request
         let choices = request.displays.map { display in
-            LayoutTemplates.fill(template(for: display), on: display, ranking: ranking, request: request)
+            let templates = LayoutTemplates.candidates(for: display)
+            return LayoutTemplates.fill(templates[(current.templateIndex[display.id] ?? 0) % templates.count], on: display, ranking: current.ranking, request: request)
         }
         let plan = LayoutTemplates.plan(from: TemplatePlan(summary: summary(of: choices, request: request), notes: history.notes, displays: choices), for: request)
         // Frames come from the composer (exact tiling); still clamp and cover anything the design left out.
-        let safe = PlanValidator.completed(PlanValidator.sanitized(plan, for: request), for: request)
-        apply(safe, to: snapshot)
-        dumpLastArrangement(request: request, ranking: ranking, final: safe, rejected: snapshot.rejected, apps: snapshot.apps)
+        return (choices, PlanValidator.completed(PlanValidator.sanitized(plan, for: request), for: request))
+    }
 
-        if let notes = ranking.notes, !notes.isEmpty {
+    private func showPreview(morphing: Bool) {
+        guard let current = session else { return }
+        let (choices, plan) = plan(of: current)
+        let cards = previewCards(for: plan, choices: choices, snapshot: current.snapshot)
+        let caption: ArrangementPreview.Caption
+        if let display = current.request.displays.first(where: { $0.id == current.focusedDisplay }) {
+            let templates = LayoutTemplates.candidates(for: display)
+            let index = (current.templateIndex[display.id] ?? 0) % templates.count
+            caption = .init(text: templates[index].title, index: index, count: templates.count)
+        } else {
+            caption = .init(text: "", index: 0, count: 0)
+        }
+        if morphing { preview.update(cards, caption: caption) } else { preview.show(cards, caption: caption) }
+    }
+
+    /// Cards for the preview: where each window is, where it will go, and what it becomes there.
+    private func previewCards(for plan: LayoutPlan, choices: [DisplayChoice], snapshot: WindowEnumerator.Snapshot) -> [ArrangementPreview.Card] {
+        let entries = Dictionary(snapshot.entries.map { ($0.info.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var roleOf: [Int: ArrangementPreview.Role] = [:]
+        var orderOf: [Int: Int] = [:]
+        for choice in choices {
+            guard let template = LayoutTemplates.template(id: choice.template) else { continue }
+            for (position, slot) in template.slotsByNearness.enumerated() {
+                guard let window = choice.slots.first(where: { $0.slot == slot.id })?.window else { continue }
+                roleOf[window] = slot.id == "main" ? .main : (slot.awareness ? .awareness : .tile)
+                orderOf[window] = position
+            }
+        }
+        return plan.placements.compactMap { placement in
+            guard let entry = entries[placement.id] else { return nil }
+            let role = placement.group == "behind" ? .hidden : (roleOf[placement.id] ?? .tile)
+            return ArrangementPreview.Card(id: placement.id, app: entry.info.app, title: entry.info.title, pid: entry.pid,
+                                           from: entry.info.frame.cgRect, to: placement.rect, role: role,
+                                           order: orderOf[placement.id] ?? 20)
+        }
+    }
+
+    /// Applies the previewed arrangement: waits for the model if it is still ranking, moves the windows under the
+    /// preview, and remembers the template chosen.
+    private func commitPreview() async {
+        guard var current = session else { return }
+        stopWatchingEscape()
+        if let pending = current.pendingRanking {
+            onBusyChange?(true, L("Ranking windows…", "正在判断窗口…"))
+            current.ranking = await pending.value
+            guard session?.id == current.id else { return }
+        }
+        session = nil
+        let (choices, safe) = plan(of: current)
+        let request = current.request
+        preview.commit { [weak self] in
+            self?.apply(safe, to: current.snapshot)
+        }
+        dumpLastArrangement(request: request, ranking: current.ranking, final: safe, rejected: current.snapshot.rejected, apps: current.snapshot.apps)
+        if let notes = current.ranking.notes, !notes.isEmpty {
             history.notes = String(notes.prefix(2000))
         }
         remember(choices, windows: request.windows)
-        let focusedDisplay = request.windows.first { $0.id == request.focusedWindowID }?.displayID ?? request.displays.first { $0.isMain }?.id ?? 0
-        let focusedTemplate = choices.first { $0.id == focusedDisplay }?.template
-        cycle = (focusedDisplay, request.displays.first { $0.id == focusedDisplay }.flatMap { d in LayoutTemplates.candidates(for: d).firstIndex { $0.id == focusedTemplate } } ?? 0, Date())
-        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
-        let source = ranking.source + (willCallModel ? "" : " cached")
-        history.record(ArrangementRecord(date: started, planner: source, summary: safe.summary, windowCount: safe.placements.count, durationMs: elapsed))
+        for display in request.displays {
+            let templates = LayoutTemplates.candidates(for: display)
+            history.templateChoice[LayoutTemplates.sizeClass(of: display)] = templates[(current.templateIndex[display.id] ?? 0) % templates.count].id
+        }
+        let elapsed = Int(Date().timeIntervalSince(current.started) * 1000)
+        let source = current.ranking.source + (current.calledModel ? "" : " cached")
+        history.record(ArrangementRecord(date: current.started, planner: source, summary: safe.summary, windowCount: safe.placements.count, durationMs: elapsed))
         saveHistory()
-
         update("\(safe.summary) (\(source), \(elapsed) ms)", planner: source)
-        onBusyChange?(false, "\(safe.summary)  ·  \(elapsed) ms")
-        watchForCorrections(after: safe, snapshot: snapshot)
+        onBusyChange?(false, "")
+        watchForCorrections(after: safe, snapshot: current.snapshot)
     }
 
-    /// Next template on one display, filled from the same ranking: local and instant. The choice is remembered for this
-    /// size of display, so the next first press starts with it.
-    private func cycleTemplate(on displayID: Int, from index: Int, now: Date) {
-        let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
-        let request = makeRequest(from: snapshot, now: now)
-        guard let display = request.displays.first(where: { $0.id == displayID }) else { endCycle(); return }
-        let templates = LayoutTemplates.candidates(for: display)
-        let next = (index + 1) % templates.count
-        let template = templates[next]
-        let ranking = cachedOrLocalRanking(for: request)
-        let choice = LayoutTemplates.fill(template, on: display, ranking: ranking, request: request)
-        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: summary(of: [choice], request: request), notes: history.notes, displays: [choice]), for: request)
-        apply(PlanValidator.sanitized(plan, for: request), to: snapshot)
-        remember([choice], windows: request.windows)
-        history.templateChoice[LayoutTemplates.sizeClass(of: display)] = template.id
-        saveHistory()
-        cycle = (displayID, next, now)
-        update("\(next + 1)/\(templates.count) \(template.title)", planner: "local")
-        onBusyChange?(false, "\(next + 1)/\(templates.count)  \(template.title)")
+    /// Esc while the preview is up: nothing moves.
+    public func cancelPreview() {
+        guard session != nil else { return }
+        session?.pendingRanking?.cancel()
+        session = nil
+        stopWatchingEscape()
+        preview.cancel()
+        onBusyChange?(false, "")
+    }
+
+    public var isPreviewing: Bool { session != nil }
+
+    /// Same as letting go of the modifiers (for the developer trigger).
+    public func releaseModifiers() {
+        Task { await commitPreview() }
+    }
+
+    private func watchEscape() {
+        stopWatchingEscape()
+        let onKey: (NSEvent) -> Bool = { [weak self] event in
+            guard event.keyCode == 53 else { return false }
+            Task { @MainActor in self?.cancelPreview() }
+            return true
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { _ = onKey($0) }) { escapeMonitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { onKey($0) ? nil : $0 }) { escapeMonitors.append(local) }
+    }
+
+    private func stopWatchingEscape() {
+        escapeMonitors.forEach(NSEvent.removeMonitor)
+        escapeMonitors = []
     }
 
     /// The template last chosen for this size of display, or the first one.
@@ -240,10 +361,10 @@ public final class SmartArranger {
     /// "Two on the right: Claude in main, 2 beside, 3 hidden", for the HUD and the history.
     private func summary(of choices: [DisplayChoice], request: LayoutRequest) -> String {
         let appOf = Dictionary(request.windows.map { ($0.id, $0.app) }, uniquingKeysWith: { a, _ in a })
-        return choices.map { choice in
+        return choices.filter { !$0.slots.isEmpty || !$0.stack.isEmpty }.map { choice in
             let title = LayoutTemplates.template(id: choice.template)?.title ?? choice.template
             let main = choice.slots.first { $0.slot == "main" }.flatMap { appOf[$0.window] } ?? "–"
-            let beside = choice.slots.count - 1
+            let beside = max(choice.slots.count - 1, 0)
             let hidden = choice.stack.count
             return L("\(title): \(main) in main, \(beside) beside, \(hidden) hidden", "\(title)：\(main) 主位，旁边 \(beside) 个，后台 \(hidden) 个")
         }.joined(separator: " | ")
@@ -633,15 +754,18 @@ public final class SmartArranger {
         }
 
         let request = makeRequest(from: snapshot, now: now)
-        let choice = LayoutTemplates.fitted(LayoutTemplates.promoted(previous, focusedID: focused.id), for: makeRequest(from: snapshot, now: now))
+        let choice = LayoutTemplates.fitted(LayoutTemplates.promoted(previous, focusedID: focused.id), for: request)
         let plan = LayoutTemplates.design(from: TemplatePlan(summary: L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"), notes: history.notes, displays: [choice]), for: request)
         var composed = LayoutComposer.plan(from: plan, for: request)
         composed.choices = [choice]
         let safe = PlanValidator.sanitized(composed, for: request)
-        apply(safe, to: snapshot, frontID: focused.id)
+        // The window flies into main and the old main flies out to its new place, then the windows follow.
+        let cards = previewCards(for: safe, choices: [choice], snapshot: snapshot).filter { $0.from.integral != $0.to.integral }
+        preview.flash(cards, caption: .init(text: L("Bring to Main", "移到主位"), index: 0, count: 0)) { [weak self] in
+            self?.apply(safe, to: snapshot, frontID: focused.id)
+        }
         remember(safe.choices, windows: request.windows)
         update(L("Brought \(focused.app) to main (\(choice.template))", "已把 \(focused.app) 移到主位（\(choice.template)）"), planner: "local")
-        onBusyChange?(false, L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"))
     }
 
     // MARK: - Presets

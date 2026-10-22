@@ -74,8 +74,8 @@ final class AppModel {
             let fresh = note.userInfo?["fresh"] != nil
             Task { @MainActor in
                 if fresh { self?.smartArranger.invalidateCache() }
-                // The developer trigger presses no modifiers, so it always arranges afresh.
-                self?.smartArranger.endCycle()
+                // The developer trigger presses no modifiers, so it arranges straight away.
+                self?.smartArranger.cancelPreview()
                 self?.perform(.smartArrange)
             }
         }
@@ -97,6 +97,10 @@ final class AppModel {
         case "save": if requireAccessibility() { smartArranger.savePreset(named: argument) }
         case "delete": smartArranger.deletePreset(named: argument)
         case "check-updates": checkForUpdatesNow()
+        // Smart Arrange as if the modifiers stayed held: press shows or switches, release applies, cancel is Esc.
+        case "press": if requireAccessibility() { smartArranger.smartArrangeKey(holding: true) }
+        case "release": smartArranger.releaseModifiers()
+        case "cancel": smartArranger.cancelPreview()
         default:
             if let action = WindowAction(rawValue: command) { perform(action) }
         }
