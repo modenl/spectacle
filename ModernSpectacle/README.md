@@ -50,12 +50,11 @@ Then grant Accessibility permission in System Settings.
 
 ## Distribution Notes
 
-For a distributable macOS app target, use Xcode or CI to archive an app target that depends on these package targets:
+`build-app.sh` builds two versions:
 
-- `ModernSpectacleApp`
-- `ModernSpectacleServices`
-- `ModernSpectacleCore`
+- Direct download (default): signed with Developer ID when that certificate is present, hardened runtime, notarized before publishing. Outside the App Sandbox; checks the store once a day for updates.
+- Mac App Store (`DISTRIBUTION=appstore ./build-app.sh`, output in `dist/appstore`): App Sandbox on, no network entitlement, compiled with `APP_STORE`, which leaves out the update check, the store link and the `spectacle-cli trigger` hooks. Accessibility works inside the sandbox once the user grants it. With an Apple Distribution certificate, a Mac Installer Distribution certificate and `MAS_PROFILE=<provisioning profile>` it signs the app and writes `dist/appstore/ModernSpectacle-<version>.pkg` for Transporter; without them it signs the sandboxed app for local testing.
 
-Use a Developer ID signing identity, enable hardened runtime, notarize the archive, and keep the app outside the App Sandbox. Accessibility-based window management needs to control other applications and is not a good fit for Mac App Store sandboxing.
+Each upload to App Store Connect needs a higher build number: `BUILD_NUMBER=5 DISTRIBUTION=appstore ARCHS="arm64 x86_64" ./build-app.sh`.
 
 Use `SMAppService` for launch-at-login registration. Do not restore the legacy helper app or AppleScript path.

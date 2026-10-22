@@ -146,10 +146,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         loginError.textColor = .systemRed
         loginError.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         stack.addArrangedSubview(loginError)
+        #if !APP_STORE
         let checkNow = NSButton(title: L("Check Now", "立即检查"), target: self, action: #selector(checkForUpdates))
         let updatesRow = NSStackView(views: [updatesToggle, checkNow])
         updatesRow.orientation = .horizontal
         stack.addArrangedSubview(updatesRow)
+        #endif
         stack.addArrangedSubview(small(L("Version \(UpdateChecker.currentVersion)", "版本 \(UpdateChecker.currentVersion)")))
 
         stack.addArrangedSubview(header(L("Smart Arrange", "智能排列")))

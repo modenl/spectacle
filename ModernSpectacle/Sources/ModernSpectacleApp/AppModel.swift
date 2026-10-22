@@ -59,7 +59,9 @@ final class AppModel {
             Task { @MainActor in self?.refreshPermissions() }
         }
         // A developer hook: `spectacle-cli trigger` posts this so arranging can be exercised without the hotkey.
-        // The token must be kept, or the observer silently goes away.
+        // The token must be kept, or the observer silently goes away. Any local process can post these, so the App
+        // Store build leaves them out (its sandbox would not deliver the arguments anyway).
+        #if !APP_STORE
         triggerObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("xyz.alvumo.ModernSpectacle.arrange"), object: nil, queue: .main
         ) { [weak self] note in
@@ -80,6 +82,7 @@ final class AppModel {
             let argument = note.userInfo?["argument"] as? String ?? ""
             Task { @MainActor in self?.runCommand(command, argument: argument) }
         }
+        #endif
     }
 
     private func runCommand(_ command: String, argument: String) {
