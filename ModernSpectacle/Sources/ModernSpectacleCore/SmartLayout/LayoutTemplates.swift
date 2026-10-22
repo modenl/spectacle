@@ -176,9 +176,37 @@ public enum LayoutTemplates {
     /// browsers and editors into slots that are too narrow; sizing needs a hard constraint, not a prompt).
     public static func minimumWidth(for kind: AppKind) -> CGFloat {
         switch kind {
-        case .coding, .browser: 640
+        case .browser: 640
+        // Terminals and assistants are fine in a 1920-wide display's side column (576 points); editors still get main.
+        case .coding: 520
         case .chat, .files, .other, .media: 300
         }
+    }
+
+    // MARK: Reusing a plan
+
+    /// Choices made for one snapshot, re-expressed for another: windows are matched by key ("bundleID|title"); windows
+    /// that are gone drop out. Window ids are only stable within one snapshot.
+    public static func translate(_ choices: [DisplayChoice], from old: [WindowInfo], to new: [WindowInfo]) -> [DisplayChoice] {
+        let keyOf = Dictionary(old.map { ($0.id, $0.key) }, uniquingKeysWith: { a, _ in a })
+        let idOf = Dictionary(new.map { ($0.key, $0.id) }, uniquingKeysWith: { a, _ in a })
+        func map(_ id: Int) -> Int? { keyOf[id].flatMap { idOf[$0] } }
+        return choices.map { choice in
+            DisplayChoice(
+                id: choice.id, template: choice.template,
+                slots: choice.slots.compactMap { a in map(a.window).map { TemplateAssignment(slot: a.slot, window: $0) } },
+                stack: choice.stack.compactMap(map),
+                cascade: choice.cascade.compactMap(map)
+            )
+        }
+    }
+
+    /// The whole local pipeline from the model's choice to frames, using the request's current focus. Run at apply time,
+    /// so a plan computed earlier (pre-warmed while another window had focus) still puts the focused window in main.
+    public static func plan(from choice: TemplatePlan, for request: LayoutRequest) -> LayoutPlan {
+        var plan = LayoutComposer.plan(from: design(from: choice, for: request), for: request)
+        plan.choices = choice.displays
+        return plan
     }
 
     // MARK: Stability and promotion
@@ -260,8 +288,10 @@ public enum LayoutTemplates {
                 if !slots.isEmpty { columns.append(ColumnDesign(share: column.share, windows: slots)) }
             }
 
+            // The plan's own stack order stands (after Bring to Main the old main window must stay first, one click
+            // away); windows that did not fit their slot follow it.
             used.subtract(demoted)
-            let stack = (demoted + choice.stack).filter { onDisplay.contains($0) && !used.contains($0) }
+            let stack = (choice.stack + demoted).filter { onDisplay.contains($0) && !used.contains($0) }
             used.formUnion(stack)
             let cascade = choice.cascade.filter { onDisplay.contains($0) && !used.contains($0) }
             displays.append(DisplayDesign(id: display.id, columns: columns, peek: stack, cascade: cascade, peekWidthShare: template.hasStack ? stackShare : nil))

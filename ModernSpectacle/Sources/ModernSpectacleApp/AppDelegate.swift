@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem()
         model.refreshPermissions()
         model.onAPIKeyChange = { [weak self] in self?.rebuildMenu() }
+        model.arranger.onPresetsChange = { [weak self] in self?.rebuildMenu() }
+        model.onLanguageChange = { [weak self] in self?.rebuildMenu() }
         model.onBusyChange = { [weak self] busy in
             guard let button = self?.statusItem?.button else { return }
             button.image = NSImage(
@@ -20,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             button.image?.isTemplate = true
         }
+        model.checkForUpdatesIfDue()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -31,14 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installMainMenu() {
         let mainMenu = NSMenu()
         let editItem = NSMenuItem()
-        let edit = NSMenu(title: "Edit")
-        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        let edit = NSMenu(title: L("Edit", "编辑"))
+        edit.addItem(withTitle: L("Undo", "撤销"), action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: L("Redo", "重做"), action: Selector(("redo:")), keyEquivalent: "Z")
         edit.addItem(.separator())
-        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: L("Cut", "剪切"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: L("Copy", "拷贝"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: L("Paste", "粘贴"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: L("Select All", "全选"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         mainMenu.addItem(editItem)
         NSApp.mainMenu = mainMenu
@@ -61,28 +64,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.autoenablesItems = false
 
         if !model.accessibilityTrusted {
-            menu.addItem(menuItem("Grant Accessibility Access") { [weak self] in
+            menu.addItem(menuItem(L("Grant Accessibility Access", "授予辅助功能权限")) { [weak self] in
                 self?.model.requestAccessibilityAccess()
                 self?.rebuildMenu()
             })
             menu.addItem(.separator())
         }
 
-        menu.addItem(menuItem("About Modern Spectacle") {
+        menu.addItem(menuItem(L("About Modern Spectacle", "关于 Modern Spectacle")) {
             NSApp.orderFrontStandardAboutPanel(nil)
         })
 
-        menu.addItem(menuItem("Settings...") { [weak self] in
+        menu.addItem(menuItem(L("Check for Updates...", "检查更新...")) { [weak self] in
+            self?.model.checkForUpdatesNow()
+        })
+
+        menu.addItem(menuItem(L("Modern Spectacle in the Store", "在商店中查看 Modern Spectacle")) {
+            NSWorkspace.shared.open(UpdatePolicy.storePageURL)
+        })
+
+        menu.addItem(menuItem(L("Settings...", "设置...")) { [weak self] in
             self?.showSettings()
         })
 
-        menu.addItem(menuItem("Layout Profile...") { [weak self] in
+        menu.addItem(menuItem(L("Layout Profile...", "布局档案...")) { [weak self] in
             self?.model.showProfile()
         })
 
         menu.addItem(.separator())
 
         addActionItems([.smartArrange, .promoteFocused], to: menu)
+        addPresetItems(to: menu)
         menu.addItem(.separator())
         addActionItems([.center, .maximize], to: menu)
         menu.addItem(.separator())
@@ -96,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        let shortcutsItem = menuItem(model.shortcutsEnabled ? "Disable Shortcuts" : "Enable Shortcuts") { [weak self] in
+        let shortcutsItem = menuItem(model.shortcutsEnabled ? L("Disable Shortcuts", "停用快捷键") : L("Enable Shortcuts", "启用快捷键")) { [weak self] in
             guard let self else { return }
             model.setShortcutsEnabled(!model.shortcutsEnabled)
             rebuildMenu()
@@ -106,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        menu.addItem(menuItem("Quit Modern Spectacle") {
+        menu.addItem(menuItem(L("Quit Modern Spectacle", "退出 Modern Spectacle")) {
             NSApp.terminate(nil)
         })
 
@@ -116,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func addActionItems(_ actions: [WindowAction], to menu: NSMenu) {
         for action in actions {
             let needsKey = (action == .smartArrange || action == .promoteFocused) && !model.hasAPIKey
-            let item = menuItem(needsKey ? "\(action.title) (needs API key)" : action.title) { [weak self] in
+            let item = menuItem(needsKey ? L("\(action.title) (needs API key)", "\(action.title)（需要 API Key）") : action.title) { [weak self] in
                 self?.model.perform(action)
             }
             item.keyEquivalent = action.keyEquivalent
@@ -125,6 +137,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.isEnabled = (model.shortcutsEnabled || action.isHistoryAction) && !needsKey
             menu.addItem(item)
         }
+    }
+
+    private func addPresetItems(to menu: NSMenu) {
+        // Always enabled: whether there is a layout to save changes with every arrangement, and the menu is not rebuilt
+        // then. Saving with nothing arranged says so in the HUD.
+        let save = menuItem(L("Save Layout...", "保存布局...")) { [weak self] in self?.model.promptToSavePreset() }
+        save.toolTip = L("Save the current arrangement under a name", "给当前的排列起个名字保存")
+        menu.addItem(save)
+
+        let presets = model.presets
+        let restore = NSMenuItem(title: L("Restore Layout", "恢复布局"), action: nil, keyEquivalent: "")
+        let restoreMenu = NSMenu(title: L("Restore Layout", "恢复布局"))
+        let delete = NSMenuItem(title: L("Delete Layout", "删除布局"), action: nil, keyEquivalent: "")
+        let deleteMenu = NSMenu(title: L("Delete Layout", "删除布局"))
+        for (index, preset) in presets.enumerated() {
+            let item = menuItem(preset.name) { [weak self] in self?.model.restorePreset(at: index) }
+            item.keyEquivalent = "\(index + 1)"
+            item.keyEquivalentModifierMask = [.control, .option, .command]
+            item.isEnabled = model.shortcutsEnabled
+            restoreMenu.addItem(item)
+            deleteMenu.addItem(menuItem(preset.name) { [weak self] in self?.model.deletePreset(named: preset.name) })
+        }
+        restoreMenu.autoenablesItems = false
+        restore.submenu = restoreMenu
+        restore.isEnabled = !presets.isEmpty
+        menu.addItem(restore)
+        delete.submenu = deleteMenu
+        delete.isEnabled = !presets.isEmpty
+        menu.addItem(delete)
     }
 
     private func menuItem(_ title: String, action: @escaping () -> Void) -> NSMenuItem {

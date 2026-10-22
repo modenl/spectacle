@@ -1,26 +1,33 @@
 import AppKit
+import ModernSpectacleCore
 
-/// A small floating prompt that never steals focus: one sentence, Accept, Dismiss. Hides itself after a few seconds.
+/// A small floating prompt that never steals focus: one sentence, Accept, Dismiss, and optionally a third choice.
+/// Hides itself after a few seconds.
 @MainActor
 public final class SuggestionPanel {
     private var panel: NSPanel?
     private var hideTask: Task<Void, Never>?
     private var onAccept: (() -> Void)?
     private var onDismiss: (() -> Void)?
+    private var onAlternate: (() -> Void)?
 
     public init() {}
 
     public func show(
         message: String,
         acceptTitle: String,
+        dismissTitle: String? = nil,
+        alternateTitle: String? = nil,
         near frame: CGRect,
         timeout: TimeInterval = 10,
         onAccept: @escaping () -> Void,
-        onDismiss: @escaping () -> Void = {}
+        onDismiss: @escaping () -> Void = {},
+        onAlternate: @escaping () -> Void = {}
     ) {
         dismiss(notify: false)
         self.onAccept = onAccept
         self.onDismiss = onDismiss
+        self.onAlternate = onAlternate
 
         let label = NSTextField(wrappingLabelWithString: message)
         label.font = .systemFont(ofSize: 13)
@@ -29,10 +36,16 @@ public final class SuggestionPanel {
         let accept = NSButton(title: acceptTitle, target: self, action: #selector(acceptTapped))
         accept.keyEquivalent = "\r"
         accept.bezelStyle = .rounded
-        let no = NSButton(title: "No", target: self, action: #selector(dismissTapped))
+        let no = NSButton(title: dismissTitle ?? L("No", "不用"), target: self, action: #selector(dismissTapped))
         no.bezelStyle = .rounded
+        var views = [no, accept]
+        if let alternateTitle {
+            let alternate = NSButton(title: alternateTitle, target: self, action: #selector(alternateTapped))
+            alternate.bezelStyle = .rounded
+            views.insert(alternate, at: 0)
+        }
 
-        let buttons = NSStackView(views: [no, accept])
+        let buttons = NSStackView(views: views)
         buttons.orientation = .horizontal
         let stack = NSStackView(views: [label, buttons])
         stack.orientation = .vertical
@@ -79,6 +92,12 @@ public final class SuggestionPanel {
         action?()
     }
 
+    @objc private func alternateTapped() {
+        let action = onAlternate
+        dismiss(notify: false)
+        action?()
+    }
+
     @objc private func dismissTapped() {
         dismiss(notify: true)
     }
@@ -91,6 +110,7 @@ public final class SuggestionPanel {
         let callback = onDismiss
         onAccept = nil
         onDismiss = nil
+        onAlternate = nil
         if notify {
             callback?()
         }

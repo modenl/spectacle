@@ -14,6 +14,9 @@ public struct ShortcutBinding: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum DefaultShortcutBindings {
+    /// Key codes of 1…9 on the number row; ⌃⌥⌘ plus a digit restores the saved layout with that number.
+    public static let presetKeyCodes: [UInt32] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+
     public static func all(
         command: UInt32,
         option: UInt32,

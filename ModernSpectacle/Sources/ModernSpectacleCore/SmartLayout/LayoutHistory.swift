@@ -43,11 +43,13 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
     public var appStyles: [String: ArrangementStyle] = [:]
     /// Recent app/window switches, newest first, so a relaunch still knows what the person was doing.
     public var activity: [ActivityRecord] = []
+    /// Named layouts the user saved; restored with ⌃⌥⌘1…9 in this order.
+    public var presets: [LayoutPreset] = []
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case notes, corrections, arrangements, appStyles, activity
+        case notes, corrections, arrangements, appStyles, activity, presets
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +59,7 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
         arrangements = try container.decodeIfPresent([ArrangementRecord].self, forKey: .arrangements) ?? []
         appStyles = try container.decodeIfPresent([String: ArrangementStyle].self, forKey: .appStyles) ?? [:]
         activity = try container.decodeIfPresent([ActivityRecord].self, forKey: .activity) ?? []
+        presets = try container.decodeIfPresent([LayoutPreset].self, forKey: .presets) ?? []
     }
 
     public mutating func record(_ correction: LayoutCorrection) {

@@ -13,6 +13,13 @@ public enum AccessibilityPermission {
         ] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
     }
+
+    /// System Settings → Privacy & Security → Accessibility, where the user turns the switch on.
+    public static func openSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 }
 
 public struct ManagedWindow: Equatable {
@@ -107,6 +114,19 @@ public struct ManagedWindow: Equatable {
         AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, dimensions)
     }
 
+    /// Brings this window in front of its app's other windows; the app itself still has to be activated.
+    public func raise() {
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
+    /// This window on top of everything: raised within its app, made the app's main window, and the app made frontmost.
+    /// Only this window comes forward, not the app's other windows.
+    public func bringToFront(pid: pid_t) {
+        AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    }
+
     private func value(for attribute: String, type: AXValueType) -> AXValue? {
         var rawValue: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &rawValue)
@@ -161,16 +181,42 @@ public final class AccessibilityClient {
 
     /// All windows of one app, front to back. Apps that do not answer within `timeout` seconds are skipped.
     public func windows(of pid: pid_t, timeout: Float = 0.25) -> [ManagedWindow] {
+        windowsWithStatus(of: pid, timeout: timeout).windows
+    }
+
+    /// Windows plus a short note on how they were found, for the debug dump. Electron and Chromium apps (Claude,
+    /// Codex, Slack…) build their accessibility tree only after an assistive app asks for it with AXManualAccessibility;
+    /// until then they answer with no windows. When an app has windows on screen but reports none, ask and retry.
+    public func windowsWithStatus(of pid: pid_t, timeout: Float = 0.25) -> (windows: [ManagedWindow], note: String) {
         let appElement = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(appElement, timeout)
-
-        var rawWindows: CFTypeRef?
-        guard
-            AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &rawWindows) == .success,
-            let elements = rawWindows as? [AXUIElement]
-        else {
-            return []
+        let (first, error) = copyWindows(appElement)
+        if !first.isEmpty || !Self.hasOnScreenWindows(pid) {
+            return (first, error == .success ? "" : "ax error \(error.rawValue)")
         }
-        return elements.map { ManagedWindow(element: $0) }
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        AXUIElementSetMessagingTimeout(appElement, 1.0)
+        let (second, retryError) = copyWindows(appElement)
+        return (second, "retried after enabling accessibility (first: ax \(error.rawValue), retry: ax \(retryError.rawValue))")
+    }
+
+    private func copyWindows(_ appElement: AXUIElement) -> ([ManagedWindow], AXError) {
+        var rawWindows: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &rawWindows)
+        guard error == .success, let elements = rawWindows as? [AXUIElement] else { return ([], error) }
+        return (elements.map { ManagedWindow(element: $0) }, error)
+    }
+
+    /// Normal-layer windows of this process that the window server shows on the current Space.
+    static func hasOnScreenWindows(_ pid: pid_t) -> Bool {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        return list.contains { info in
+            (info[kCGWindowOwnerPID as String] as? pid_t) == pid
+                && (info[kCGWindowLayer as String] as? Int) == 0
+                && ((info[kCGWindowBounds as String] as? [String: CGFloat])?["Width"] ?? 0) >= 100
+        }
     }
 }

@@ -5,12 +5,16 @@ import ModernSpectacleCore
 @MainActor
 public final class HotKeyCenter {
     public typealias ActionHandler = @MainActor (WindowAction) -> Void
+    /// Receives the 0-based preset number for ⌃⌥⌘1…9.
+    public typealias PresetHandler = @MainActor (Int) -> Void
 
     private var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
     private var actionsByIdentifier: [UInt32: WindowAction] = [:]
+    private var presetsByIdentifier: [UInt32: Int] = [:]
     private var eventHandlerRef: EventHandlerRef?
     private var nextIdentifier: UInt32 = 0
     private var handler: ActionHandler?
+    private var presetHandler: PresetHandler?
 
     public init() {
         installEventHandler()
@@ -25,8 +29,9 @@ public final class HotKeyCenter {
         }
     }
 
-    public func registerDefaultShortcuts(handler: @escaping ActionHandler) {
+    public func registerDefaultShortcuts(handler: @escaping ActionHandler, presetHandler: PresetHandler? = nil) {
         self.handler = handler
+        self.presetHandler = presetHandler
         unregisterAll()
 
         let bindings = DefaultShortcutBindings.all(
@@ -39,6 +44,14 @@ public final class HotKeyCenter {
         for binding in bindings {
             register(binding)
         }
+        if presetHandler != nil {
+            let modifiers = UInt32(cmdKey) | UInt32(optionKey) | UInt32(controlKey)
+            for (index, keyCode) in DefaultShortcutBindings.presetKeyCodes.enumerated() {
+                if let identifier = register(keyCode: keyCode, modifiers: modifiers) {
+                    presetsByIdentifier[identifier] = index
+                }
+            }
+        }
     }
 
     public func unregisterAll() {
@@ -47,17 +60,24 @@ public final class HotKeyCenter {
         }
         hotKeyRefs.removeAll()
         actionsByIdentifier.removeAll()
+        presetsByIdentifier.removeAll()
     }
 
     private func register(_ binding: ShortcutBinding) {
+        if let identifier = register(keyCode: binding.keyCode, modifiers: binding.carbonModifiers) {
+            actionsByIdentifier[identifier] = binding.action
+        }
+    }
+
+    private func register(keyCode: UInt32, modifiers: UInt32) -> UInt32? {
         nextIdentifier += 1
         var hotKeyRef: EventHotKeyRef?
         let identifier = nextIdentifier
         let hotKeyID = EventHotKeyID(signature: Self.signature, id: identifier)
 
         let status = RegisterEventHotKey(
-            binding.keyCode,
-            binding.carbonModifiers,
+            keyCode,
+            modifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
@@ -65,11 +85,11 @@ public final class HotKeyCenter {
         )
 
         guard status == noErr, let hotKeyRef else {
-            return
+            return nil
         }
 
         hotKeyRefs[identifier] = hotKeyRef
-        actionsByIdentifier[identifier] = binding.action
+        return identifier
     }
 
     private func installEventHandler() {
@@ -116,6 +136,10 @@ public final class HotKeyCenter {
     }
 
     private func invoke(identifier: UInt32) {
+        if let preset = presetsByIdentifier[identifier] {
+            presetHandler?(preset)
+            return
+        }
         guard let action = actionsByIdentifier[identifier] else {
             return
         }

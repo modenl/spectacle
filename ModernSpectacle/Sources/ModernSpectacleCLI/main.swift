@@ -10,6 +10,9 @@ import ModernSpectacleServices
 //   spectacle-cli plan --sample       plan a built-in sample desktop (no Accessibility needed)
 //   spectacle-cli arrange [--heuristic]  plan and apply
 //   spectacle-cli trigger             ask the running app to Smart Arrange (same as ⌃⌥⌘A)
+//   spectacle-cli trigger <command> [argument]
+//                                     ask the running app to run a WindowAction by name (leftHalf, promoteFocused…),
+//                                     restore <n>, save <name>, delete <name>, or check-updates
 
 @MainActor
 func run() async {
@@ -19,6 +22,14 @@ func run() async {
         exit(2)
     }
     // `trigger` must not touch the keychain: reading an item the app created makes macOS show a permission dialog.
+    if command == "trigger", args.count >= 2, args[1] != "--fresh" {
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("xyz.alvumo.ModernSpectacle.command"), object: nil,
+            userInfo: ["command": args[1], "argument": args.dropFirst(2).joined(separator: " ")], deliverImmediately: true
+        )
+        print("sent \(args[1])")
+        return
+    }
     if command == "trigger" {
         DistributedNotificationCenter.default().postNotificationName(
             Notification.Name("xyz.alvumo.ModernSpectacle.arrange"), object: nil,

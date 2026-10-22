@@ -91,11 +91,9 @@ public final class ClaudePlanner: LayoutPlanner, Sendable {
             throw PlannerError.http(status, String(decoding: data, as: UTF8.self))
         }
         let choice = try parseTemplatePlan(from: data)
-        let design = LayoutTemplates.design(from: choice, for: request)
-        var plan = LayoutComposer.plan(from: design, for: request)
+        var plan = LayoutTemplates.plan(from: choice, for: request)
         let picked = choice.displays.map { "\($0.template)" }.joined(separator: ", ")
         plan.summary = "[\(picked)] " + plan.summary
-        plan.choices = choice.displays
         return plan
     }
 

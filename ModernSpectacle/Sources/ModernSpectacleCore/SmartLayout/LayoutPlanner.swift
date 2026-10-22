@@ -35,7 +35,7 @@ public enum PlanValidator {
             placements.append(Placement(id: placement.id, group: placement.group, rect: rect))
         }
 
-        return LayoutPlan(summary: plan.summary, notes: plan.notes, placements: placements)
+        return LayoutPlan(summary: plan.summary, notes: plan.notes, placements: placements, choices: plan.choices)
     }
 
     /// Windows the planner left out (typically a whole display it ignored) are tiled in a grid; fixed-size ones are
@@ -52,7 +52,7 @@ public enum PlanValidator {
             let cascade = ArrangementAnalyzer.cascadeFrames(sizes: fixed.map { $0.frame.cgRect.size }, in: display.visibleFrame)
             placements += zip(fixed, cascade).map { Placement(id: $0.id, group: "background", rect: $1) }
         }
-        return LayoutPlan(summary: plan.summary, notes: plan.notes, placements: placements)
+        return LayoutPlan(summary: plan.summary, notes: plan.notes, placements: placements, choices: plan.choices)
     }
 
     static func clamp(_ rect: CGRect, into bounds: CGRect) -> CGRect {

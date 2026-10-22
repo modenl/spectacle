@@ -77,8 +77,9 @@ public enum LayoutComposer {
     /// `windows` is most-useful-first; the most useful one sits lowest (and on top), the rest show above it.
     public static func peekFrames(count: Int, in frame: CGRect, stripWidth: CGFloat? = nil) -> [CGRect] {
         guard count > 0 else { return [] }
-        // Wide enough to be useful once clicked; at least the strip, and never more than half the display.
-        let width = min(max(stripWidth ?? 0, min(frame.width * 0.5, 1100)), frame.width).rounded()
+        // Wide enough to be useful once clicked, but narrow enough that the tiles keep most of their area visible:
+        // at least the strip, at most 40% of the display.
+        let width = min(max(stripWidth ?? 0, min(frame.width * 0.4, 900)), frame.width).rounded()
         let height = min(frame.height * 0.7, 820).rounded()
         let step: CGFloat = 36
         return (0..<count).map { index in

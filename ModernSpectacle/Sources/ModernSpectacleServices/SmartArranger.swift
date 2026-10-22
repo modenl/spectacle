@@ -12,7 +12,7 @@ public final class SmartArranger {
         public var date: Date?
     }
 
-    public private(set) var status = Status(message: "Idle", planner: nil, date: nil)
+    public private(set) var status = Status(message: L("Idle", "空闲"), planner: nil, date: nil)
     public var onStatusChange: ((Status) -> Void)?
     /// True while a plan is being requested from the model (not for cache hits or background pre-warming).
     public var onBusyChange: ((Bool, String) -> Void)?
@@ -49,8 +49,11 @@ public final class SmartArranger {
     private var focusTimeline: [(bundleID: String, app: String, window: String, start: Date)] = []
     /// "bundleID|title" -> when that window last had keyboard focus.
     private var windowFocus: [String: Date] = [:]
-    private var cachedPlan: (signature: String, plan: LayoutPlan, planner: String, date: Date)?
+    /// The model's last answer with the windows it was computed for. Only the template choice is reused: frames are
+    /// recomputed for the current snapshot, so focus changes since the plan was made are respected.
+    private var cachedPlan: (signature: String, plan: LayoutPlan, windows: [WindowInfo], planner: String, date: Date)?
     private var prewarmTask: Task<Void, Never>?
+    private var restackTask: Task<Void, Never>?
     private var correctionTask: Task<Void, Never>?
     private var inFlightSignature: String?
     private var observers: [NSObjectProtocol] = []
@@ -128,11 +131,11 @@ public final class SmartArranger {
     public func arrange() async {
         Self.log("arrange requested (key: \(usesClaude), accessibility: \(AccessibilityPermission.isTrusted))")
         guard usesClaude else {
-            update("Smart Arrange needs a Claude API key (Settings)", planner: nil)
+            update(L("Smart Arrange needs a Claude API key (Settings)", "智能排列需要 Claude API Key（在设置里填写）"), planner: nil)
             return
         }
         guard AccessibilityPermission.isTrusted else {
-            update("Accessibility permission required", planner: nil)
+            update(L("Accessibility permission required", "需要辅助功能权限"), planner: nil)
             return
         }
 
@@ -140,13 +143,13 @@ public final class SmartArranger {
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: started)
         let request = makeRequest(from: snapshot, now: started)
         guard !request.windows.isEmpty else {
-            update("No windows to arrange", planner: nil)
+            update(L("No windows to arrange", "没有可排列的窗口"), planner: nil)
             return
         }
 
         lastRequest = request
         let willCallModel = usesClaude && !hasFreshCachedPlan(for: request.signature)
-        onBusyChange?(true, willCallModel ? "Arranging with Claude…" : "Arranging…")
+        onBusyChange?(true, willCallModel ? L("Arranging with Claude…", "Claude 正在排列…") : L("Arranging…", "正在排列…"))
         let (plan, plannerName) = await plan(for: request, allowNetwork: true)
         // Frames come from the composer (exact tiling); still clamp and cover anything the design left out.
         let safe = PlanValidator.completed(PlanValidator.sanitized(plan, for: request), for: request)
@@ -174,13 +177,17 @@ public final class SmartArranger {
     private func plan(for request: LayoutRequest, allowNetwork: Bool) async -> (LayoutPlan, String) {
         let signature = request.signature
         if let cached = cachedPlan, cached.signature == signature, Date().timeIntervalSince(cached.date) < Self.cacheLifetime {
-            return (cached.plan, cached.planner + " cached")
+            guard let choices = cached.plan.choices else { return (cached.plan, cached.planner + " cached") }
+            let translated = LayoutTemplates.translate(choices, from: cached.windows, to: request.windows)
+            var plan = LayoutTemplates.plan(from: TemplatePlan(summary: cached.plan.summary, notes: cached.plan.notes, displays: translated), for: request)
+            plan.summary = cached.plan.summary
+            return (plan, cached.planner + " cached")
         }
 
         if allowNetwork, usesClaude {
             do {
                 let plan = try await claude.plan(request)
-                cachedPlan = (signature, plan, claude.name, Date())
+                cachedPlan = (signature, plan, request.windows, claude.name, Date())
                 return (plan, claude.name)
             } catch {
                 NSLog("SmartArranger: Claude failed, using heuristic: \(error)")
@@ -189,7 +196,7 @@ public final class SmartArranger {
         return (heuristic.planNow(request), heuristic.name)
     }
 
-    private func apply(_ plan: LayoutPlan, to snapshot: WindowEnumerator.Snapshot) {
+    private func apply(_ plan: LayoutPlan, to snapshot: WindowEnumerator.Snapshot, frontID: Int? = nil) {
         let entriesByID = Dictionary(snapshot.entries.map { ($0.info.id, $0) }, uniquingKeysWith: { first, _ in first })
         var undo: [(window: ManagedWindow, frame: CGRect)] = []
         suppressObservationUntil = Date().addingTimeInterval(2)
@@ -204,27 +211,28 @@ public final class SmartArranger {
         if !undo.isEmpty {
             windowController.pushUndo(undo)
         }
-        restack(plan, entriesByID: entriesByID)
+        let front = frontID ?? snapshot.windows.first { $0.isFocused }?.id
+        restack(plan, entriesByID: entriesByID, frontID: front)
     }
 
-    /// Window order across apps follows app activation, so bring apps forward from least to most important:
-    /// peeking apps first (they end up behind), then tiled apps, and finally the app that had focus.
-    private func restack(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry]) {
+    /// Peeking windows must sit behind the tiles, and the focused window on top. Window order follows raising, one
+    /// window at a time (raising a whole app would pull its peeking windows over the tiles): peeks least useful first,
+    /// then the tiles, then the front window. Each step raises the window and makes its app frontmost.
+    private func restack(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], frontID: Int?) {
         let peeks = plan.placements.filter { $0.group == "peek" }
-        guard !peeks.isEmpty else { return }
+        guard !peeks.isEmpty || frontID != nil else { return }
+        let tiles = plan.placements.filter { $0.group.hasPrefix("column") && $0.id != frontID }
+        var sequence = peeks.reversed().compactMap { entriesByID[$0.id] } + tiles.compactMap { entriesByID[$0.id] }
+        if let frontID, let front = entriesByID[frontID] { sequence.append(front) }
+        guard !sequence.isEmpty else { return }
 
-        let focusedPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        var order: [pid_t] = []
-        func push(_ pid: pid_t) { if !order.contains(pid) { order.append(pid) } }
-        for placement in peeks.reversed() { if let pid = entriesByID[placement.id]?.pid { push(pid) } }
-        let tiled = plan.placements.filter { $0.group.hasPrefix("column") }
-            .compactMap { entriesByID[$0.id] }
-            .sorted { ($0.info.appActiveSecondsAgo ?? .max) > ($1.info.appActiveSecondsAgo ?? .max) }
-        for entry in tiled { push(entry.pid) }
-        if let focusedPID { order.removeAll { $0 == focusedPID }; order.append(focusedPID) }
-
-        for pid in order {
-            NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+        restackTask?.cancel()
+        restackTask = Task { @MainActor in
+            for entry in sequence {
+                guard !Task.isCancelled else { return }
+                entry.window.bringToFront(pid: entry.pid)
+                try? await Task.sleep(for: .milliseconds(30))
+            }
         }
     }
 
@@ -302,8 +310,8 @@ public final class SmartArranger {
             let total = partial.tiled.count + partial.remaining.count
             let entries = snapshot.entries
             suggestion.show(
-                message: "You tiled \(partial.tiled.count) \(appName) windows. Tile all \(total) on this display?",
-                acceptTitle: "Tile all",
+                message: L("You tiled \(partial.tiled.count) \(appName) windows. Tile all \(total) on this display?", "你平铺了 \(partial.tiled.count) 个 \(appName) 窗口。要把这个显示器上的 \(total) 个都平铺吗？"),
+                acceptTitle: L("Tile all", "全部平铺"),
                 near: display.visibleFrame,
                 onAccept: { [weak self] in
                     self?.tileAll(tiled: partial.tiled, remaining: partial.remaining, entries: entries, in: display)
@@ -336,7 +344,7 @@ public final class SmartArranger {
         }
         cachedPlan = nil
         recentUserMoves.removeAll()
-        update("Tiled \(ordered.count) \(ordered.first?.app ?? "") windows", planner: "user")
+        update(L("Tiled \(ordered.count) \(ordered.first?.app ?? "") windows", "已平铺 \(ordered.count) 个 \(ordered.first?.app ?? "") 窗口"), planner: "user")
     }
 
     // MARK: - Pre-warm
@@ -407,7 +415,7 @@ public final class SmartArranger {
         defer { inFlightSignature = nil }
         do {
             let plan = try await claude.plan(request)
-            cachedPlan = (signature, plan, claude.name, Date())
+            cachedPlan = (signature, plan, request.windows, claude.name, Date())
         } catch {
             NSLog("SmartArranger: pre-warm failed: \(error)")
         }
@@ -491,7 +499,7 @@ public final class SmartArranger {
         let now = Date()
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
         guard let focused = snapshot.windows.first(where: { $0.isFocused }) else {
-            update("No focused window", planner: nil)
+            update(L("No focused window", "没有焦点窗口"), planner: nil)
             return
         }
         guard let previous = previousChoices(for: snapshot.windows).first(where: { $0.id == focused.displayID }),
@@ -502,15 +510,93 @@ public final class SmartArranger {
 
         let request = makeRequest(from: snapshot, now: now)
         let choice = LayoutTemplates.promoted(previous, focusedID: focused.id)
-        let plan = LayoutTemplates.design(from: TemplatePlan(summary: "Brought \(focused.app) to main", notes: history.notes, displays: [choice]), for: request)
+        let plan = LayoutTemplates.design(from: TemplatePlan(summary: L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"), notes: history.notes, displays: [choice]), for: request)
         var composed = LayoutComposer.plan(from: plan, for: request)
         composed.choices = [choice]
         let safe = PlanValidator.sanitized(composed, for: request)
-        apply(safe, to: snapshot)
+        apply(safe, to: snapshot, frontID: focused.id)
         remember(safe.choices, windows: request.windows)
         cachedPlan = nil
-        update("Brought \(focused.app) to main (\(choice.template))", planner: "local")
-        onBusyChange?(false, "Brought \(focused.app) to main")
+        update(L("Brought \(focused.app) to main (\(choice.template))", "已把 \(focused.app) 移到主位（\(choice.template)）"), planner: "local")
+        onBusyChange?(false, L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"))
+    }
+
+    // MARK: - Presets
+
+    public var presets: [LayoutPreset] { history.presets }
+    /// Called when presets are added or removed, so the menu can list them.
+    public var onPresetsChange: (() -> Void)?
+
+    /// True when there is an applied template layout to save (after ⌃⌥⌘A, Bring to Main, or restoring a preset).
+    public var canSavePreset: Bool { !lastChoices.isEmpty }
+
+    /// Saves the layout currently applied, by app and window title, under `name`. Same name replaces.
+    @discardableResult
+    public func savePreset(named name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let now = Date()
+        let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
+        let request = makeRequest(from: snapshot, now: now)
+        guard let preset = LayoutPresets.make(name: trimmed, from: request.previous, request: request, date: now) else {
+            update(L("Nothing to save yet: arrange first (⌃⌥⌘A)", "还没有可保存的布局：先按 ⌃⌥⌘A 排列"), planner: nil)
+            onBusyChange?(false, L("Arrange first (⌃⌥⌘A), then save the layout", "先按 ⌃⌥⌘A 排列，再保存布局"))
+            return false
+        }
+        history.presets = LayoutPresets.saving(preset, into: history.presets)
+        saveHistory()
+        onPresetsChange?()
+        let number = history.presets.firstIndex { $0.name == trimmed }.map { L(" as ⌃⌥⌘\($0 + 1)", "，快捷键 ⌃⌥⌘\($0 + 1)") } ?? ""
+        update(L("Saved layout \"\(trimmed)\"\(number)", "已保存布局「\(trimmed)」\(number)"), planner: "local")
+        onBusyChange?(false, L("Saved \"\(trimmed)\"\(number)", "已保存「\(trimmed)」\(number)"))
+        return true
+    }
+
+    public func deletePreset(named name: String) {
+        history.presets.removeAll { $0.name == name }
+        saveHistory()
+        onPresetsChange?()
+    }
+
+    /// Restores preset number `index` (0-based). Local and instant: no model call. Windows of the preset's apps are
+    /// matched to what is open now; apps that are not running leave their slot empty, other windows go to the stack.
+    public func restorePreset(at index: Int) {
+        guard history.presets.indices.contains(index) else {
+            update(L("No layout saved as ⌃⌥⌘\(index + 1)", "⌃⌥⌘\(index + 1) 还没有保存布局"), planner: nil)
+            onBusyChange?(false, L("No layout saved as ⌃⌥⌘\(index + 1)", "⌃⌥⌘\(index + 1) 还没有保存布局"))
+            return
+        }
+        guard AccessibilityPermission.isTrusted else {
+            update(L("Accessibility permission required", "需要辅助功能权限"), planner: nil)
+            return
+        }
+        let preset = history.presets[index]
+        let now = Date()
+        let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
+        let (choices, request) = LayoutPresets.restore(preset, for: makeRequest(from: snapshot, now: now))
+        guard choices.contains(where: { !$0.slots.isEmpty }) else {
+            update(L("None of the windows in \"\(preset.name)\" are open", "「\(preset.name)」里的窗口一个都没打开"), planner: nil)
+            onBusyChange?(false, L("None of the windows in \"\(preset.name)\" are open", "「\(preset.name)」里的窗口一个都没打开"))
+            return
+        }
+
+        let design = LayoutTemplates.design(from: TemplatePlan(summary: L("Restored \(preset.name)", "已恢复 \(preset.name)"), notes: history.notes, displays: choices), for: request)
+        var composed = LayoutComposer.plan(from: design, for: request)
+        composed.choices = choices
+        // The preset's main window gets focus, on the main display if the preset spans several.
+        let mainChoice = choices.first { c in request.displays.first { $0.id == c.id }?.isMain == true } ?? choices[0]
+        let mainID = mainChoice.slots.first(where: { $0.slot == "main" })?.window ?? mainChoice.slots.first?.window
+        let safe = PlanValidator.sanitized(composed, for: request)
+        apply(safe, to: snapshot, frontID: mainID)
+        remember(choices, windows: request.windows)
+        cachedPlan = nil
+
+        let placed = choices.map { $0.slots.count + $0.stack.count + $0.cascade.count }.reduce(0, +)
+        let missing = preset.windowCount - placed
+        let note = missing > 0 ? L(", \(missing) not open", "，\(missing) 个没打开") : ""
+        update(L("Restored \"\(preset.name)\" (\(placed) windows\(note))", "已恢复「\(preset.name)」（\(placed) 个窗口\(note)）"), planner: "preset")
+        onBusyChange?(false, L("Restored \"\(preset.name)\"\(note)", "已恢复「\(preset.name)」\(note)"))
+        watchForCorrections(after: safe, snapshot: snapshot)
     }
 
     // MARK: - Editing the memory
@@ -533,8 +619,11 @@ public final class SmartArranger {
         saveHistory()
     }
 
+    /// Forgets what was learned; saved presets are the user's own and stay.
     public func resetLearning() {
-        history = LayoutHistory()
+        var fresh = LayoutHistory()
+        fresh.presets = history.presets
+        history = fresh
         cachedPlan = nil
         saveHistory()
     }
@@ -555,6 +644,7 @@ public final class SmartArranger {
             focusedWindowID: snapshot.windows.first { $0.isFocused }?.id,
             focusTimeline: timelineEvents(now: now)
         )
+        request.language = Localization.isChinese ? "zh-Hans" : "en"
         request.templates = LayoutTemplates.offers(for: request)
         request.previous = previousChoices(for: request.windows)
         return request

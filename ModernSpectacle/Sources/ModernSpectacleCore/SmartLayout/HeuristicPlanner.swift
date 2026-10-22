@@ -25,7 +25,7 @@ public struct HeuristicPlanner: LayoutPlanner {
 
         let groups = Set(placements.map(\.group)).sorted().joined(separator: ", ")
         return LayoutPlan(
-            summary: placements.isEmpty ? "Nothing to arrange" : "Arranged \(placements.count) windows: \(groups)",
+            summary: placements.isEmpty ? L("Nothing to arrange", "没有可排列的窗口") : L("Arranged \(placements.count) windows: \(groups)", "已排列 \(placements.count) 个窗口：\(groups)"),
             notes: request.notes,
             placements: placements
         )

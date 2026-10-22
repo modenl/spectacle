@@ -49,7 +49,7 @@ public enum LayoutPrompt {
     "cascade" is only for Finder windows and windows with "resizable": false. Every window on a display appears exactly \
     once across slots, stack and cascade. Leave a slot empty rather than filling it with a window that does not belong; \
     empty slots collapse and their space goes to the others. Prefer a template with a stack whenever there are more \
-    windows than tile slots. Also return a one-line "summary" in the person's language of what you did and why, and the \
+    windows than tile slots. Also return a one-line "summary" of what you did and why, written in the request's "language" (zh-Hans: Simplified Chinese), and the \
     updated "notes".
     """
 

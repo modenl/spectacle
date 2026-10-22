@@ -26,51 +26,51 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable, Sendable 
 
     public var title: String {
         switch self {
-        case .center: "Center"
-        case .maximize: "Maximize"
-        case .leftHalf: "Left Half"
-        case .rightHalf: "Right Half"
-        case .topHalf: "Top Half"
-        case .bottomHalf: "Bottom Half"
-        case .upperLeft: "Upper Left"
-        case .lowerLeft: "Lower Left"
-        case .upperRight: "Upper Right"
-        case .lowerRight: "Lower Right"
-        case .nextThird: "Next Third"
-        case .previousThird: "Previous Third"
-        case .nextDisplay: "Next Display"
-        case .previousDisplay: "Previous Display"
-        case .larger: "Larger"
-        case .smaller: "Smaller"
-        case .undo: "Undo"
-        case .redo: "Redo"
-        case .smartArrange: "Smart Arrange"
-        case .promoteFocused: "Bring to Main"
+        case .center: L("Center", "居中")
+        case .maximize: L("Maximize", "最大化")
+        case .leftHalf: L("Left Half", "左半屏")
+        case .rightHalf: L("Right Half", "右半屏")
+        case .topHalf: L("Top Half", "上半屏")
+        case .bottomHalf: L("Bottom Half", "下半屏")
+        case .upperLeft: L("Upper Left", "左上角")
+        case .lowerLeft: L("Lower Left", "左下角")
+        case .upperRight: L("Upper Right", "右上角")
+        case .lowerRight: L("Lower Right", "右下角")
+        case .nextThird: L("Next Third", "下一个三分之一")
+        case .previousThird: L("Previous Third", "上一个三分之一")
+        case .nextDisplay: L("Next Display", "下一个显示器")
+        case .previousDisplay: L("Previous Display", "上一个显示器")
+        case .larger: L("Larger", "放大")
+        case .smaller: L("Smaller", "缩小")
+        case .undo: L("Undo", "撤销")
+        case .redo: L("Redo", "重做")
+        case .smartArrange: L("Smart Arrange", "智能排列")
+        case .promoteFocused: L("Bring to Main", "移到主位")
         }
     }
 
     public var defaultShortcutDescription: String {
         switch self {
-        case .center: "Option+Command+C"
-        case .maximize: "Option+Command+F"
-        case .leftHalf: "Option+Command+Left"
-        case .rightHalf: "Option+Command+Right"
-        case .topHalf: "Option+Command+Up"
-        case .bottomHalf: "Option+Command+Down"
-        case .upperLeft: "Control+Command+Left"
-        case .lowerLeft: "Control+Shift+Command+Left"
-        case .upperRight: "Control+Command+Right"
-        case .lowerRight: "Control+Shift+Command+Right"
-        case .nextDisplay: "Control+Option+Command+Right"
-        case .previousDisplay: "Control+Option+Command+Left"
-        case .nextThird: "Control+Option+Right"
-        case .previousThird: "Control+Option+Left"
-        case .larger: "Control+Option+Shift+Right"
-        case .smaller: "Control+Option+Shift+Left"
-        case .undo: "Option+Command+Z"
-        case .redo: "Option+Shift+Command+Z"
-        case .smartArrange: "Control+Option+Command+A"
-        case .promoteFocused: "Control+Option+Command+Return"
+        case .center: "⌥⌘C"
+        case .maximize: "⌥⌘F"
+        case .leftHalf: "⌥⌘←"
+        case .rightHalf: "⌥⌘→"
+        case .topHalf: "⌥⌘↑"
+        case .bottomHalf: "⌥⌘↓"
+        case .upperLeft: "⌃⌘←"
+        case .lowerLeft: "⌃⇧⌘←"
+        case .upperRight: "⌃⌘→"
+        case .lowerRight: "⌃⇧⌘→"
+        case .nextDisplay: "⌃⌥⌘→"
+        case .previousDisplay: "⌃⌥⌘←"
+        case .nextThird: "⌃⌥→"
+        case .previousThird: "⌃⌥←"
+        case .larger: "⌃⌥⇧→"
+        case .smaller: "⌃⌥⇧←"
+        case .undo: "⌥⌘Z"
+        case .redo: "⌥⇧⌘Z"
+        case .smartArrange: "⌃⌥⌘A"
+        case .promoteFocused: "⌃⌥⌘↩"
         }
     }
 
