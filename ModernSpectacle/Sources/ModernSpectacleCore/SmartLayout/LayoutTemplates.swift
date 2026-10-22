@@ -246,18 +246,6 @@ public enum LayoutTemplates {
         }
     }
 
-    /// Choices made for one snapshot, re-expressed for another. Window ids are only stable within one snapshot.
-    public static func translate(_ choices: [DisplayChoice], from old: [WindowInfo], to new: [WindowInfo]) -> [DisplayChoice] {
-        let keyOf = Dictionary(old.map { ($0.id, $0.key) }, uniquingKeysWith: { a, _ in a })
-        let stored = choices.map { c in
-            (display: c.id, template: c.template,
-             slots: c.slots.compactMap { a in keyOf[a.window].map { (slot: a.slot, key: $0) } },
-             stack: c.stack.compactMap { keyOf[$0] },
-             cascade: c.cascade.compactMap { keyOf[$0] })
-        }
-        return LayoutTemplates.choices(fromKeys: stored, in: new)
-    }
-
     /// When a window does not fit the slot it is in (a browser swapped next to main on a laptop), switch to another
     /// template for this display where more of the important windows stay visible, instead of letting it fall into the
     /// background. Windows keep their order of importance: main, then by nearness. Keeps the choice when nothing does better.

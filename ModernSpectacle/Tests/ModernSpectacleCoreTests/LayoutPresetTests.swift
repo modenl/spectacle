@@ -188,21 +188,6 @@ struct PlanReuseTests {
     }
 
     @Test
-    func cachedChoiceFollowsTheCurrentFocus() {
-        // Planned while Claude had focus; applied after the user switched to Sublime, and window ids changed.
-        let then = [window(1, "claude", .coding, focused: true), window(2, "term", .coding), window(3, "sublime", .coding)]
-        let choice = [DisplayChoice(id: 0, template: "std-main-2", slots: [TemplateAssignment(slot: "main", window: 1), TemplateAssignment(slot: "side-top", window: 2)], stack: [3])]
-        let now = request([window(7, "sublime", .coding, focused: true), window(8, "claude", .coding), window(9, "term", .coding)])
-
-        let translated = LayoutTemplates.translate(choice, from: then, to: now.windows)
-        #expect(translated[0].slots == [TemplateAssignment(slot: "main", window: 8), TemplateAssignment(slot: "side-top", window: 9)])
-        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: translated), for: now)
-        #expect(plan.placements.first { $0.id == 7 }?.rect.minX == 0) // focused Sublime took main, not the stack
-        #expect(plan.placements.first { $0.id == 7 }?.group == "column1")
-        #expect(plan.choices != nil)
-    }
-
-    @Test
     func terminalsFitALaptopSideColumnButBrowsersWaitBehind() {
         let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 33, width: 1512, height: 871), isMain: true)
         var req = LayoutRequest(displays: [laptop], windows: [window(1, "claude", .coding, focused: true), window(2, "chrome", .browser), window(3, "term", .coding), window(4, "notes", .other)], recentApps: [], corrections: [], notes: "", localTime: "t")

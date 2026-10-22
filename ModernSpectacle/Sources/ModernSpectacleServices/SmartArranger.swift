@@ -334,7 +334,6 @@ public final class SmartArranger {
         onBusyChange?(false, "")
     }
 
-    public var isPreviewing: Bool { session != nil }
 
     /// Same as letting go of the modifiers (for the developer trigger).
     public func releaseModifiers() {

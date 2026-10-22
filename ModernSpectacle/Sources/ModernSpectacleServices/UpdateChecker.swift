@@ -31,7 +31,7 @@ public final class UpdateChecker {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
 
-    /// On by default; the only network access besides the Claude API, and it sends nothing but the version.
+    /// On by default; the app's only network access, and it sends nothing but the version.
     public var automaticChecks: Bool {
         get { defaults.object(forKey: Keys.automatic) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Keys.automatic) }

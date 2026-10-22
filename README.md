@@ -2,7 +2,7 @@
 
 Easily organize windows without using a mouse.
 
-This repository now contains only [`ModernSpectacle`](ModernSpectacle/README.md), a Swift rewrite of Spectacle for current macOS with Smart Arrange (Claude-planned window layouts). The original Objective-C app by Eric Czarny is in this repository's git history.
+This repository now contains only [`ModernSpectacle`](ModernSpectacle/README.md), a Swift rewrite of Spectacle for current macOS with Smart Arrange (window layouts ranked by Apple's on-device model). The original Objective-C app by Eric Czarny is in this repository's git history.
 
 ## Build and run
 

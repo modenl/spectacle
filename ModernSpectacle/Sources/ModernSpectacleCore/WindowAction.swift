@@ -49,35 +49,6 @@ public enum WindowAction: String, CaseIterable, Codable, Identifiable, Sendable 
         }
     }
 
-    public var defaultShortcutDescription: String {
-        switch self {
-        case .center: "⌥⌘C"
-        case .maximize: "⌥⌘F"
-        case .leftHalf: "⌥⌘←"
-        case .rightHalf: "⌥⌘→"
-        case .topHalf: "⌥⌘↑"
-        case .bottomHalf: "⌥⌘↓"
-        case .upperLeft: "⌃⌘←"
-        case .lowerLeft: "⌃⇧⌘←"
-        case .upperRight: "⌃⌘→"
-        case .lowerRight: "⌃⇧⌘→"
-        case .nextDisplay: "⌃⌥⌘→"
-        case .previousDisplay: "⌃⌥⌘←"
-        case .nextThird: "⌃⌥→"
-        case .previousThird: "⌃⌥←"
-        case .larger: "⌃⌥⇧→"
-        case .smaller: "⌃⌥⇧←"
-        case .undo: "⌥⌘Z"
-        case .redo: "⌥⇧⌘Z"
-        case .smartArrange: "⌃⌥⌘M"
-        case .promoteFocused: "⌃⌥⌘↩"
-        }
-    }
-
-    public var menuTitle: String {
-        "\(title) (\(shortcutDescription))"
-    }
-
     /// The shortcut in effect, after the user's changes.
     public var shortcutDescription: String {
         ShortcutStore.description(for: self)

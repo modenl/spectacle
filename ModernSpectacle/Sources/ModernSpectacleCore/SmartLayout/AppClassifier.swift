@@ -1,6 +1,6 @@
 import Foundation
 
-/// Cold-start classification of apps. The model and the user's corrections override this; it only seeds the heuristic planner.
+/// Cold-start classification of apps, used for readability floors and local ranking. The user's corrections override it.
 public enum AppClassifier {
     private static let codingBundleIDs: Set<String> = [
         "com.microsoft.VSCode",
