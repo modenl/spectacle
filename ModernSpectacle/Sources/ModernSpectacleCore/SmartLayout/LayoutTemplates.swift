@@ -185,6 +185,18 @@ public enum LayoutTemplates {
         return result
     }
 
+    /// The template a press starts with: the one the person chose last for this size of display, unless it has too few
+    /// slots for the windows that want one (`needed`, from the local ranking, known before the model answers), in which
+    /// case the smallest template that has enough, or the largest one. Returns an index into `candidates`.
+    public static func startingTemplate(in candidates: [LayoutTemplate], remembered: String?, needed: Int) -> Int {
+        let slots = candidates.map(\.slotIDs.count)
+        let want = min(max(needed, 1), slots.max() ?? 1)
+        if let index = candidates.firstIndex(where: { $0.id == remembered }), slots[index] >= want { return index }
+        let fitting = slots.indices.filter { slots[$0] >= want }
+        if let smallest = fitting.min(by: { (slots[$0], $0) < (slots[$1], $1) }) { return smallest }
+        return slots.indices.max { slots[$0] < slots[$1] } ?? 0
+    }
+
     /// "wide", "standard" or "small": the key under which the last template used on such a display is remembered.
     public static func sizeClass(of display: DisplayInfo) -> String {
         let width = display.visibleFrame.width

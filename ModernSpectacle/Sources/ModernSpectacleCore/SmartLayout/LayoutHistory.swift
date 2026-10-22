@@ -48,12 +48,15 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
     /// The template last chosen for each size of display ("wide", "standard", "small"); the next arrangement starts there.
     public var templateChoice: [String: String] = [:]
     /// Narrowest width each app was seen to accept (bundle id -> points), learned when a window would not shrink.
+    /// Stored under a new key: the first version learned from resizes still in progress (Sublime Text "at least 1920
+    /// wide") and its values are dropped.
     public var minimumWidths: [String: Int] = [:]
 
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case notes, corrections, arrangements, appStyles, activity, presets, templateChoice, minimumWidths
+        case notes, corrections, arrangements, appStyles, activity, presets, templateChoice
+        case minimumWidths = "minimumWidthsV2"
     }
 
     public init(from decoder: Decoder) throws {

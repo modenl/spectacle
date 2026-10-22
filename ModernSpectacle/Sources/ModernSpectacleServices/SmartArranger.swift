@@ -204,10 +204,12 @@ public final class SmartArranger {
         let pointer = CGPoint(x: NSEvent.mouseLocation.x, y: mainHeight - NSEvent.mouseLocation.y)
         let focusedDisplay = request.activeDisplayID(pointer: pointer) ?? 0
         var templateIndex: [Int: Int] = [:]
+        // How many windows want a slot, judged locally (focus and recency) so the template is chosen right away.
+        let localRoles = Dictionary(LocalRanker.rank(request).windows.map { ($0.id, $0.role) }, uniquingKeysWith: { a, _ in a })
         for display in request.displays {
             let templates = LayoutTemplates.candidates(for: display)
-            let remembered = history.templateChoice[LayoutTemplates.sizeClass(of: display)]
-            templateIndex[display.id] = templates.firstIndex { $0.id == remembered } ?? 0
+            let needed = request.windows.filter { $0.displayID == display.id && $0.resizable && localRoles[$0.id] != .background }.count
+            templateIndex[display.id] = LayoutTemplates.startingTemplate(in: templates, remembered: history.templateChoice[LayoutTemplates.sizeClass(of: display)], needed: needed)
         }
         // The model is called the moment the key goes down; the template is chosen independently while it works.
         var current = Session(snapshot: snapshot, request: request, ranking: needsModel ? nil : cachedOrLocalRanking(for: request),
@@ -473,7 +475,6 @@ public final class SmartArranger {
             if !moved.isEmpty {
                 windowController.pushUndo(moved.map { ($0.job.window, $0.before) })
             }
-            for item in moved { learnMinimumWidth(bundleID: item.job.bundleID, app: item.job.app, planned: item.job.target, actual: item.after) }
             Self.log("apply: moved \(moved.count) of \(plan.placements.count), visible in \(visibleMs) ms, all in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
             suppressObservationUntil = Date().addingTimeInterval(2)
             settle(plan, entriesByID: entriesByID, displays: snapshot.displays)
@@ -507,21 +508,24 @@ public final class SmartArranger {
     private func settle(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], displays: [DisplayInfo]) {
         settleTask?.cancel()
         settleTask = Task { @MainActor in
-            for _ in 0..<2 {
+            for pass in 0..<2 {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
                 var retried = 0
                 for placement in plan.placements {
                     guard let entry = entriesByID[placement.id], let actual = entry.window.frame else { continue }
                     let window = entry.window
-                    learnMinimumWidth(bundleID: entry.info.bundleID, app: entry.info.app, planned: placement.rect, actual: actual)
-                    // A window bigger than planned is at its app's minimum: aim for its own size, kept inside the display.
                     var target = placement.rect
-                    if actual.width > target.width + 2 || actual.height > target.height + 2,
+                    // Still bigger than planned after being told again: that is the app's own minimum. Only then is
+                    // it remembered and the window kept inside the display at its own size. (An app that resizes
+                    // asynchronously, like Sublime Text or iTerm, reports its old size for a moment; the first pass
+                    // simply asks again.)
+                    if pass == 1, actual.width > target.width + 2 || actual.height > target.height + 2,
                        let display = displays.first(where: { $0.visibleFrame.contains(CGPoint(x: target.midX, y: target.midY)) })?.visibleFrame {
                         target.size = CGSize(width: max(target.width, actual.width), height: max(target.height, actual.height))
                         target.origin.x = max(display.minX, min(target.minX, display.maxX - target.width))
                         target.origin.y = max(display.minY, min(target.minY, display.maxY - target.height))
+                        learnMinimumWidth(bundleID: entry.info.bundleID, app: entry.info.app, planned: placement.rect, actual: actual)
                     }
                     let off = abs(actual.minX - target.minX) > 4 || abs(actual.minY - target.minY) > 4
                         || abs(actual.width - target.width) > 4 || abs(actual.height - target.height) > 4
@@ -539,7 +543,8 @@ public final class SmartArranger {
     /// Remembers how narrow an app's windows can get when one would not shrink to its slot, so the next arrangement
     /// does not put it where it would overlap its neighbour.
     private func learnMinimumWidth(bundleID: String, app: String, planned: CGRect, actual: CGRect?) {
-        guard let actual, actual.width > planned.width + 2 else { return }
+        // No real app refuses to be narrower than 1000 points; a value like that is a resize still in progress.
+        guard let actual, actual.width > planned.width + 2, actual.width <= 1000 else { return }
         let width = Int(actual.width.rounded())
         guard width > history.minimumWidths[bundleID] ?? 0 else { return }
         history.minimumWidths[bundleID] = width
@@ -817,7 +822,8 @@ public final class SmartArranger {
     }
 
     /// Bring the focused window into the main slot of its display, pushing the previous main window to where the
-    /// focused one came from. Local and instant; falls back to a full arrangement when there is no layout yet.
+    /// focused one came from. Always local and instant, never asks the model: with nothing arranged on that display
+    /// yet, its template is filled from the local ranking with the focused window in main.
     public func promoteFocused() {
         let now = Date()
         let snapshot = enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now)
@@ -825,13 +831,30 @@ public final class SmartArranger {
             update(L("No focused window", "没有焦点窗口"), planner: nil)
             return
         }
-        guard let previous = previousChoices(for: snapshot.windows).first(where: { $0.id == focused.displayID }),
-              previous.slots.contains(where: { $0.slot == "main" }) else {
-            Task { await arrange() }
+        let request = makeRequest(from: snapshot, now: now).restricted(to: focused.displayID)
+        let previous: DisplayChoice
+        if let last = previousChoices(for: snapshot.windows).first(where: { $0.id == focused.displayID }), last.slots.contains(where: { $0.slot == "main" }) {
+            previous = last
+        } else {
+            guard let display = request.displays.first else { return }
+            let templates = LayoutTemplates.candidates(for: display)
+            let ranking = cachedOrLocalRanking(for: request)
+            let needed = ranking.windows.filter { $0.role != .background }.count
+            let index = LayoutTemplates.startingTemplate(in: templates, remembered: history.templateChoice[LayoutTemplates.sizeClass(of: display)], needed: needed)
+            // Laid out as the windows are now: every block flies from where its window is.
+            let filled = LayoutTemplates.fill(templates[index], on: display, ranking: ranking, request: request)
+            let plan = PlanValidator.sanitized(LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [filled]), for: request), for: request)
+            let currentFrames = Dictionary(request.windows.map { ($0.id, $0.frame.cgRect) }, uniquingKeysWith: { a, _ in a })
+            let blocks = windowBlocks(plan, choice: filled)
+            let before = blocks.compactMap { block in Int(block.key.dropFirst()).flatMap { currentFrames[$0] }.map { ArrangementPreview.Slot(key: block.key, rect: $0, role: .tile) } }
+            preview.flash(from: before, to: blocks, caption: .init(text: L("Bring to Main", "移到主位"), index: 0, count: 0)) { [weak self] done in
+                self?.apply(plan, to: snapshot, frontID: focused.id, whenVisible: done)
+            }
+            remember([filled], windows: request.windows)
+            update(L("Brought \(focused.app) to main (\(filled.template))", "已把 \(focused.app) 移到主位（\(filled.template)）"), planner: "local")
             return
         }
 
-        let request = makeRequest(from: snapshot, now: now)
         let choice = LayoutTemplates.fitted(LayoutTemplates.promoted(previous, focusedID: focused.id), for: request)
         let plan = LayoutTemplates.design(from: TemplatePlan(summary: L("Brought \(focused.app) to main", "已把 \(focused.app) 移到主位"), notes: history.notes, displays: [choice]), for: request)
         var composed = LayoutComposer.plan(from: plan, for: request)

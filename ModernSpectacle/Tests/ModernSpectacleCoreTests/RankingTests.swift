@@ -220,3 +220,23 @@ struct ActiveDisplayTests {
         #expect(request.activeDisplayID(pointer: nil) == 0) // the main display
     }
 }
+
+@Suite
+struct StartingTemplateTests {
+    @Test
+    func theRememberedTemplateIsKeptWhileItHasRoom() {
+        let standard = LayoutTemplates.standard // main+2 (3), two columns (2), grid (4)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 2) == 1)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 1) == 1)
+    }
+
+    @Test
+    func tooFewSlotsMovesUpToTheSmallestThatFits() {
+        let standard = LayoutTemplates.standard
+        // Two columns remembered, but Claude, iTerm and Sublime all want a place: main + two on the right.
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 3) == 0)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 4) == 2)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 9) == 2) // the largest
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: nil, needed: 2) == 1)
+    }
+}

@@ -93,6 +93,11 @@ public final class ArrangementPreview {
     /// Shows the slots, morphing from whatever is on the map now. `near` picks the display the map appears on.
     public func present(slots: [Slot], caption: Caption, waiting: Bool, near: CGRect? = nil) {
         hideTask?.cancel()
+        show(slots: slots, caption: caption, waiting: waiting, near: near)
+    }
+
+    /// `present` without cancelling a pending hide or commit (Bring to Main's second step runs inside that task).
+    private func show(slots: [Slot], caption: Caption, waiting: Bool, near: CGRect? = nil) {
         if !isVisible || map == nil {
             map?.panel.orderOut(nil)
             map = makeMap(near: near ?? slots.first { $0.role == .main }?.rect)
@@ -140,7 +145,7 @@ public final class ArrangementPreview {
         hideTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(still ? 0 : 160))
             guard !Task.isCancelled, let self else { return }
-            present(slots: after, caption: caption, waiting: false)
+            show(slots: after, caption: caption, waiting: false)
             try? await Task.sleep(for: .seconds(still ? 0.1 : Self.flight + 0.1))
             guard !Task.isCancelled else { return }
             commit(apply)
