@@ -1,7 +1,7 @@
 import AppKit
 import ModernSpectacleCore
 
-/// One hotkey: snapshot the desktop, rank the windows (Apple's on-device model, or locally), fill the display's
+/// One hotkey: snapshot the desktop, rank the windows (Jev, or locally), fill the display's
 /// template from the ranking, apply it, and learn from what the user moves afterwards. Nothing is computed until the key
 /// goes down: the model is asked then, while the preview shows the template, and the windows move when every key is
 /// let go. A ranking is reused for a while if the same apps are open, so pressing again does not ask the model again.
@@ -88,7 +88,7 @@ public final class SmartArranger {
     public init(
         windowController: WindowController,
         enumerator: WindowEnumerator = WindowEnumerator(),
-        ranker: any WindowRanker = AppleRanker(),
+        ranker: any WindowRanker = JevRanker(),
         historyURL: URL = SmartArranger.defaultHistoryURL
     ) {
         self.windowController = windowController
@@ -128,9 +128,9 @@ public final class SmartArranger {
         return base.appendingPathComponent("ModernSpectacle/layout-history.json")
     }
 
-    /// Apple's on-device model when it is available; otherwise (nil) windows are ranked locally.
+    /// Jev when a key is set; otherwise (nil) windows are ranked locally.
     private var activeRanker: (any WindowRanker)? {
-        AppleRanker.status == .available ? ranker : nil
+        JevRanker.hasKey ? ranker : nil
     }
 
     // MARK: - Arrange
@@ -191,7 +191,7 @@ public final class SmartArranger {
         if needsModel {
             let id = current.id
             current.pendingRanking = Task { @MainActor [weak self] in
-                let ranking = await self?.rankingWithin(seconds: 10, for: request)
+                let ranking = await self?.rankingWithin(seconds: 5, for: request)
                 guard let self, let ranking, session?.id == id else { return }
                 session?.ranking = ranking
                 showPreview(morphing: true)

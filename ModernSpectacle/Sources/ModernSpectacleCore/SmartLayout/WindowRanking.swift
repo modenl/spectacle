@@ -25,7 +25,7 @@ public struct RankedWindow: Codable, Equatable, Sendable {
 public struct WindowRanking: Codable, Equatable, Sendable {
     /// Most relevant first.
     public var windows: [RankedWindow]
-    /// Who ranked: "apple" or "local".
+    /// Who ranked: "jev" or "local".
     public var source: String
     public init(windows: [RankedWindow], source: String) {
         self.windows = windows
@@ -64,7 +64,7 @@ public struct WindowRanking: Codable, Equatable, Sendable {
 }
 
 /// Ranking without a model: the focused window, then by how recently each window or its app had focus. Roles come from
-/// the kind of app. Used where Apple's on-device model is not available, and whenever it fails.
+/// the kind of app. Used without a Jev key, and whenever Jev fails or is slow.
 public enum LocalRanker {
     public static func rank(_ request: LayoutRequest) -> WindowRanking {
         let windows = request.windows.map { window -> RankedWindow in

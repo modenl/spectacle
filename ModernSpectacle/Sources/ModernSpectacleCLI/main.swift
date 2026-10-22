@@ -6,7 +6,7 @@ import ModernSpectacleServices
 // Developer tool: inspect the snapshot the ranker sees and try rankers without the app.
 //
 //   spectacle-cli snapshot            print the windows and displays as JSON
-//   spectacle-cli plan [--local]      rank the windows (Apple's on-device model, or --local), fill each display's
+//   spectacle-cli plan [--local]      rank the windows (Jev, or --local), fill each display's
 //                                     first template, print both
 //   spectacle-cli plan --sample …     the same for a built-in sample desktop (no Accessibility needed)
 //   spectacle-cli arrange …           rank, fill and apply
@@ -39,8 +39,8 @@ func run() async {
         print("sent")
         return
     }
-    let ranker: (any WindowRanker)? = args.contains("--local") || AppleRanker.status != .available ? nil : AppleRanker()
-    if ranker == nil, !args.contains("--local") { print("Apple's on-device model: \(AppleRanker.status); ranking locally") }
+    let ranker: (any WindowRanker)? = args.contains("--local") || !JevRanker.hasKey ? nil : JevRanker()
+    if ranker == nil, !args.contains("--local") { print("no Jev key; ranking locally") }
 
     let request: LayoutRequest
     let snapshot: WindowEnumerator.Snapshot?

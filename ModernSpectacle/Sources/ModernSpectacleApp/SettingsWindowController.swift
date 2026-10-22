@@ -11,7 +11,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let loginToggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let updatesToggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let modelStatus = NSTextField(labelWithString: "")
+    private let jevStatus = NSTextField(labelWithString: "")
+    private let jevField = NSSecureTextField()
     private let loginError = NSTextField(wrappingLabelWithString: "")
     private let arrangeStatus = NSTextField(wrappingLabelWithString: "")
     private var shortcutButtons: [WindowAction: NSButton] = [:]
@@ -92,20 +93,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         loginError.stringValue = model.loginItems.lastError ?? ""
         loginError.isHidden = model.loginItems.lastError == nil
 
-        switch AppleRanker.status {
-        case .available:
-            modelStatus.stringValue = L("Apple Intelligence: on this Mac, nothing leaves it", "Apple Intelligence：在本机运行，数据不离开这台 Mac")
-            modelStatus.textColor = .systemGreen
-        case .notReady:
-            modelStatus.stringValue = L("Apple Intelligence: model still downloading", "Apple Intelligence：模型还在下载")
-            modelStatus.textColor = .systemOrange
-        case .notEnabled:
-            modelStatus.stringValue = L("Apple Intelligence is off", "Apple Intelligence 未开启")
-            modelStatus.textColor = .systemOrange
-        case .unsupported:
-            modelStatus.stringValue = L("Apple Intelligence is not available on this Mac", "这台 Mac 不支持 Apple Intelligence")
-            modelStatus.textColor = .secondaryLabelColor
-        }
+        jevStatus.stringValue = model.jevKeyStatus
+        jevStatus.textColor = model.jevKeyValid == true ? .systemGreen : model.jevKeyValid == false ? .systemRed : .secondaryLabelColor
         arrangeStatus.stringValue = model.arrangeStatus
         updatesToggle.state = model.updates.automaticChecks ? .on : .off
         for (action, button) in shortcutButtons where action != recording {
@@ -153,13 +142,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         stack.addArrangedSubview(small(L("Version \(UpdateChecker.currentVersion)", "版本 \(UpdateChecker.currentVersion)")))
 
         stack.addArrangedSubview(header(L("Smart Arrange", "智能排列")))
-        let intelligenceButton = NSButton(title: L("Open Settings", "打开设置"), target: self, action: #selector(openAppleIntelligence))
-        let modelRow = NSStackView(views: [modelStatus, intelligenceButton])
-        modelRow.orientation = .horizontal
-        stack.addArrangedSubview(modelRow)
+        jevField.placeholderString = L("Paste your TypeSafe key", "粘贴 TypeSafe Key")
+        jevField.usesSingleLineMode = true
+        jevField.cell?.isScrollable = true
+        jevField.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        jevField.target = self
+        jevField.action = #selector(saveJevKey)
+        let saveKey = NSButton(title: L("Save", "保存"), target: self, action: #selector(saveJevKey))
+        let removeKey = NSButton(title: L("Remove", "删除"), target: self, action: #selector(removeJevKey))
+        let keyRow = NSStackView(views: [jevField, saveKey, removeKey])
+        keyRow.orientation = .horizontal
+        stack.addArrangedSubview(row(L("Jev key", "Jev Key"), trailing: keyRow))
+        stack.addArrangedSubview(jevStatus)
         stack.addArrangedSubview(small(L(
-            "Apple's on-device model decides which windows matter now; templates and sizes are computed on this Mac. Without it, windows are ranked by focus and recency.",
-            "由 Apple 本机模型判断哪些窗口当前重要，模版和尺寸都在本机计算。模型不可用时，按焦点和最近使用排序。"
+            "Jev (TypeSafe) decides which windows matter now; it receives app names and window titles. Templates and sizes are computed on this Mac. Without a key, nothing is sent and windows are ranked by focus and recency.",
+            "由 Jev（TypeSafe）判断哪些窗口当前重要，它会收到应用名和窗口标题；模版和尺寸都在本机计算。没有 Key 时不发送任何内容，按焦点和最近使用排序。"
         )))
         let profileButton = NSButton(title: L("Layout Profile…", "布局档案…"), target: self, action: #selector(openProfile))
         stack.addArrangedSubview(profileButton)
@@ -324,8 +321,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         model.setLanguage(language)
     }
 
-    @objc private func openAppleIntelligence() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension") { NSWorkspace.shared.open(url) }
+    @objc private func saveJevKey() {
+        let key = jevField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        jevField.stringValue = ""
+        model.saveJevKey(key)
+    }
+
+    @objc private func removeJevKey() {
+        model.saveJevKey("")
     }
 
     @objc private func openProfile() {

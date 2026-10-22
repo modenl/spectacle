@@ -212,6 +212,53 @@ final class AppModel {
         onLanguageChange?()
     }
 
+    // MARK: - Jev key
+
+    /// What Settings shows about the stored key: its shape and whether TypeSafe accepts it, never the key.
+    private(set) var jevKeyStatus = KeychainStore.jevKey?.isEmpty == false ? L("Stored in Keychain", "已存入钥匙串") : AppModel.noStoredKeyStatus
+
+    private static var noStoredKeyStatus: String {
+        JevRanker.hasBuiltInKey ? L("Using the key built into the app", "使用应用内置的 Key") : L("Not set: windows are ranked on this Mac", "未设置：在本机排序")
+    }
+    private(set) var jevKeyValid: Bool?
+
+    /// An empty key removes it.
+    func saveJevKey(_ key: String) {
+        do {
+            try KeychainStore.setJevKey(key)
+        } catch {
+            jevKeyStatus = L("Could not save to Keychain (\(error))", "无法存入钥匙串（\(error)）")
+            jevKeyValid = false
+            onChange?()
+            return
+        }
+        smartArranger.invalidateCache()
+        checkJevKey()
+    }
+
+    func checkJevKey() {
+        guard let key = KeychainStore.jevKey, !key.isEmpty else {
+            jevKeyStatus = Self.noStoredKeyStatus
+            jevKeyValid = nil
+            onChange?()
+            return
+        }
+        let shape = L("\(key.prefix(6))…, \(key.count) characters", "\(key.prefix(6))…，\(key.count) 个字符")
+        jevKeyStatus = L("Checking \(shape)…", "正在检查 \(shape)…")
+        jevKeyValid = nil
+        onChange?()
+        Task { [weak self] in
+            let result = await JevRanker.check(key: key)
+            guard let self else { return }
+            switch result {
+            case .valid: (jevKeyStatus, jevKeyValid) = (L("Valid (\(shape))", "有效（\(shape)）"), true)
+            case let .invalid(detail): (jevKeyStatus, jevKeyValid) = (L("Rejected: \(detail)", "被拒绝：\(detail)"), false)
+            case let .unreachable(detail): (jevKeyStatus, jevKeyValid) = (L("Could not reach TypeSafe: \(detail)", "连不上 TypeSafe：\(detail)"), false)
+            }
+            onChange?()
+        }
+    }
+
     // MARK: - Updates
 
     private var mainDisplayFrame: CGRect {

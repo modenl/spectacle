@@ -42,6 +42,10 @@ rm -rf "${APP_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 cp "${BIN_DIR}/${PRODUCT_NAME}" "${MACOS_DIR}/${APP_NAME}"
+# The Jev key built into the app, if jev.key exists (gitignored). Anyone with the app can read it.
+if [[ -s "${SCRIPT_DIR}/jev.key" ]]; then
+  cp "${SCRIPT_DIR}/jev.key" "${RESOURCES_DIR}/jev.key"
+fi
 
 # Build AppIcon.icns from the 1024px source PNG.
 ICONSET_DIR="$(mktemp -d)/AppIcon.iconset"

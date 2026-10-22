@@ -69,15 +69,22 @@ struct RankingTests {
     }
 
     @Test
-    func theModelsOrderBecomesTheRankingAndForgottenWindowsAreAppended() {
-        let req = request(laptop, [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "slack", .chat)])
-        // As the on-device model might answer: a repeat and an id that does not exist, and Slack left out.
-        let ranked = RankingPrompt.ranking(task: [2, 1, 2, 99], awareness: [], request: req, source: "apple")
-        #expect(ranked.windows.map(\.id) == [2, 1, 3])
-        #expect(ranked.windows.map(\.role) == [.task, .task, .background]) // what it left out is background
-        #expect(ranked.source == "apple")
-        let withChat = RankingPrompt.ranking(task: [1], awareness: [3], request: req, source: "apple")
-        #expect(withChat.windows.map(\.role) == [.task, .awareness, .background])
+    func jevScoresBecomeTheRankingWithFocusFirst() throws {
+        let req = request(laptop, [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "slack", .chat), window(4, "notes", .other)])
+        let body = JevRequest.body(for: req)
+        #expect(body.questions.count == 8)
+        #expect(body.questions["relevance-2"]?.instructions.contains("iterm") == false) // titles stay in the state, as data
+        // Jev rates iTerm above the focused window, puts Slack in awareness, and leaves Notes out.
+        let answer = """
+        {"answers": {"relevance-1": {"type": "score", "score": 2}, "role-1": {"type": "choice", "choice": "background"},
+                     "relevance-2": {"type": "score", "score": 3}, "role-2": {"type": "choice", "choice": "task"},
+                     "relevance-3": {"type": "score", "score": 1}, "role-3": {"type": "choice", "choice": "awareness"}}}
+        """
+        let ranked = try JevRequest.ranking(fromResponse: Data(answer.utf8), request: req)
+        #expect(ranked.windows.map(\.id) == [1, 2, 3, 4])
+        #expect(ranked.windows.map(\.role) == [.task, .task, .awareness, .background])
+        #expect(ranked.source == "jev")
+        _ = try JSONEncoder().encode(ranked) // cached and logged as JSON
     }
 
     @Test
