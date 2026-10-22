@@ -31,16 +31,20 @@ public struct DisplayDesign: Codable, Equatable, Sendable {
     public var cascade: [Int]
     /// Width of the stack column as a share of the column shares; nil means the default narrow strip.
     public var peekWidthShare: Double?
+    /// No strip at all: background windows go fully behind the tiles, nothing of them shows. For layouts without a
+    /// stack column, where a strip would only squeeze the tiles and show unreadable slivers (laptops above all).
+    public var hideBackground: Bool
 
-    public init(id: Int, columns: [ColumnDesign], peek: [Int] = [], cascade: [Int], peekWidthShare: Double? = nil) {
+    public init(id: Int, columns: [ColumnDesign], peek: [Int] = [], cascade: [Int], peekWidthShare: Double? = nil, hideBackground: Bool = false) {
         self.id = id
         self.columns = columns
         self.peek = peek
         self.cascade = cascade
         self.peekWidthShare = peekWidthShare
+        self.hideBackground = hideBackground
     }
 
-    private enum CodingKeys: String, CodingKey { case id, columns, peek, cascade, peekWidthShare }
+    private enum CodingKeys: String, CodingKey { case id, columns, peek, cascade, peekWidthShare, hideBackground }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -49,6 +53,7 @@ public struct DisplayDesign: Codable, Equatable, Sendable {
         peek = try c.decodeIfPresent([Int].self, forKey: .peek) ?? []
         cascade = try c.decodeIfPresent([Int].self, forKey: .cascade) ?? []
         peekWidthShare = try c.decodeIfPresent(Double.self, forKey: .peekWidthShare)
+        hideBackground = try c.decodeIfPresent(Bool.self, forKey: .hideBackground) ?? false
     }
 }
 
@@ -155,6 +160,11 @@ public enum LayoutComposer {
             if let share = displayDesign.peekWidthShare {
                 let total = columns.map(\.share).reduce(0, +) + share
                 stripWidth = (frame.width * CGFloat(share / total)).rounded()
+            }
+            // Hidden background: the windows fill the display behind the tiles, so nothing of them shows.
+            if displayDesign.hideBackground, !columns.isEmpty {
+                placements += peekIDs.map { Placement(id: $0, group: "behind", rect: frame) }
+                peekIDs = []
             }
             let tileFrame = peekIDs.isEmpty ? frame
                 : CGRect(x: frame.minX, y: frame.minY, width: frame.width - stripWidth, height: frame.height)

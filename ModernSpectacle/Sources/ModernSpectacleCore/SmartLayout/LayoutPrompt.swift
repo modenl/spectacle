@@ -45,11 +45,13 @@ public enum LayoutPrompt {
     templates available for that display size (id, description, slot names, whether it has a stack). For each display pick \
     the template that fits the task best and fill its slots: "slots" maps slot names to window ids (the focused window \
     takes "main"; the other most useful windows take the remaining tile slots). Windows that are open but not part of the \
-    task go to "stack" (most useful first): they stay large behind the tiles with an edge showing, one click away. \
+    task go to "stack" (most useful first): in a template with a stack they stay large behind the tiles with an edge \
+    showing, one click away; in a template without one they wait fully hidden behind the tiles. Laptop templates have \
+    no stack: there, pick the one or two windows the task needs and put everything else in "stack". \
     "cascade" is only for Finder windows and windows with "resizable": false. Every window on a display appears exactly \
     once across slots, stack and cascade. Leave a slot empty rather than filling it with a window that does not belong; \
-    empty slots collapse and their space goes to the others. Prefer a template with a stack whenever there are more \
-    windows than tile slots. Also return a one-line "summary" of what you did and why, written in the request's "language" (zh-Hans: Simplified Chinese), and the \
+    empty slots collapse and their space goes to the others. On standard and wide displays prefer a template with a stack \
+    whenever there are more windows than tile slots. Also return a one-line "summary" of what you did and why, written in the request's "language" (zh-Hans: Simplified Chinese), and the \
     updated "notes".
     """
 

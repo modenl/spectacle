@@ -141,14 +141,15 @@ public enum LayoutTemplates {
                        columns: [single(0.8, "main"), stack(0.2)]),
     ]
 
-    /// Laptop displays (under 1600 points).
+    /// Laptop displays (under 1600 points): at most two regions and no stack strip. A strip on a laptop leaves the
+    /// tiles too narrow and shows only unreadable slivers; background windows wait fully hidden behind the tiles.
     public static let small: [LayoutTemplate] = [
-        LayoutTemplate(id: "small-monocle", description: "One window fills the display, the rest stacked at the right edge",
-                       columns: [single(0.82, "main"), stack(0.18)]),
-        LayoutTemplate(id: "small-2col", description: "Two columns, main on the left",
+        LayoutTemplate(id: "small-monocle", description: "The main window fills the display; everything else waits hidden behind it",
+                       columns: [single(1, "main")]),
+        LayoutTemplate(id: "small-2col", description: "Two columns, main on the left (55%), a second window on the right; everything else hidden behind",
                        columns: [single(0.55, "main"), single(0.45, "second")]),
-        LayoutTemplate(id: "small-main-stack", description: "Main window with the rest stacked on the right",
-                       columns: [single(0.7, "main"), stack(0.3)]),
+        LayoutTemplate(id: "small-main-side", description: "Main window (65%) with a narrow companion on the right such as chat or a terminal; everything else hidden behind",
+                       columns: [single(0.65, "main"), single(0.35, "side")]),
     ]
 
     public static func candidates(for display: DisplayInfo) -> [LayoutTemplate] {
@@ -294,7 +295,12 @@ public enum LayoutTemplates {
             let stack = (choice.stack + demoted).filter { onDisplay.contains($0) && !used.contains($0) }
             used.formUnion(stack)
             let cascade = choice.cascade.filter { onDisplay.contains($0) && !used.contains($0) }
-            displays.append(DisplayDesign(id: display.id, columns: columns, peek: stack, cascade: cascade, peekWidthShare: template.hasStack ? stackShare : nil))
+            displays.append(DisplayDesign(
+                id: display.id, columns: columns, peek: stack, cascade: cascade,
+                peekWidthShare: template.hasStack ? stackShare : nil,
+                // A template without a stack column gets no strip: its widths, readability included, stay as designed.
+                hideBackground: !template.hasStack
+            ))
         }
         return LayoutDesign(summary: plan.summary, notes: plan.notes, displays: displays, enforceFocusedSize: false)
     }

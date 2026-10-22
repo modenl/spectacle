@@ -54,6 +54,7 @@ public final class SmartArranger {
     private var cachedPlan: (signature: String, plan: LayoutPlan, windows: [WindowInfo], planner: String, date: Date)?
     private var prewarmTask: Task<Void, Never>?
     private var restackTask: Task<Void, Never>?
+    private var settleTask: Task<Void, Never>?
     private var correctionTask: Task<Void, Never>?
     private var inFlightSignature: String?
     private var observers: [NSObjectProtocol] = []
@@ -206,23 +207,66 @@ public final class SmartArranger {
             if current.integral == placement.rect.integral { continue }
             undo.append((entry.window, current))
             entry.window.setFrame(placement.rect)
+            keepInsideDisplay(entry.window, planned: placement.rect, displays: snapshot.displays)
         }
 
         if !undo.isEmpty {
             windowController.pushUndo(undo)
         }
+        settle(plan, entriesByID: entriesByID, displays: snapshot.displays)
         let front = frontID ?? snapshot.windows.first { $0.isFocused }?.id
         restack(plan, entriesByID: entriesByID, frontID: front)
     }
 
+    /// Some apps resize asynchronously (Sublime Text) and drop a size change that arrives while the previous one is
+    /// still in flight, so a window can end up moved but not resized. Check shortly after and set it again, twice at most.
+    private func settle(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], displays: [DisplayInfo]) {
+        settleTask?.cancel()
+        settleTask = Task { @MainActor in
+            for _ in 0..<2 {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                var retried = 0
+                for placement in plan.placements {
+                    guard let window = entriesByID[placement.id]?.window, let actual = window.frame else { continue }
+                    let target = placement.rect
+                    let off = abs(actual.minX - target.minX) > 4 || abs(actual.minY - target.minY) > 4
+                        || abs(actual.width - target.width) > 4 || abs(actual.height - target.height) > 4
+                    // Larger than planned is an app minimum, handled by keepInsideDisplay; only fix what fell short or moved.
+                    let atMinimum = actual.width > target.width + 2 || actual.height > target.height + 2
+                    guard off, !atMinimum else { continue }
+                    suppressObservationUntil = Date().addingTimeInterval(2)
+                    window.setFrame(target)
+                    keepInsideDisplay(window, planned: target, displays: displays)
+                    retried += 1
+                }
+                if retried == 0 { return }
+                Self.log("settle: set \(retried) window(s) again")
+            }
+        }
+    }
+
+    /// Some apps will not get narrower (or shorter) than their own minimum (Notes, Activity Monitor). Placed at the
+    /// planned origin they would stick out past the display edge, so move such a window back inside.
+    private func keepInsideDisplay(_ window: ManagedWindow, planned: CGRect, displays: [DisplayInfo]) {
+        guard let actual = window.frame, actual.width > planned.width + 2 || actual.height > planned.height + 2,
+              let display = displays.first(where: { $0.visibleFrame.contains(CGPoint(x: planned.midX, y: planned.midY)) })?.visibleFrame
+        else { return }
+        var fixed = actual
+        if fixed.maxX > display.maxX { fixed.origin.x = max(display.minX, display.maxX - fixed.width) }
+        if fixed.maxY > display.maxY { fixed.origin.y = max(display.minY, display.maxY - fixed.height) }
+        if fixed.origin != actual.origin { window.setFrame(fixed) }
+    }
+
     /// Peeking windows must sit behind the tiles, and the focused window on top. Window order follows raising, one
-    /// window at a time (raising a whole app would pull its peeking windows over the tiles): peeks least useful first,
-    /// then the tiles, then the front window. Each step raises the window and makes its app frontmost.
+    /// window at a time (raising a whole app would pull its peeking windows over the tiles): hidden background windows
+    /// first, then peeks least useful first, then the tiles, then the front window. Each step raises the window and makes its app frontmost.
     private func restack(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], frontID: Int?) {
         let peeks = plan.placements.filter { $0.group == "peek" }
-        guard !peeks.isEmpty || frontID != nil else { return }
+        let hidden = plan.placements.filter { $0.group == "behind" }
+        guard !peeks.isEmpty || !hidden.isEmpty || frontID != nil else { return }
         let tiles = plan.placements.filter { $0.group.hasPrefix("column") && $0.id != frontID }
-        var sequence = peeks.reversed().compactMap { entriesByID[$0.id] } + tiles.compactMap { entriesByID[$0.id] }
+        var sequence = (hidden + peeks.reversed()).compactMap { entriesByID[$0.id] } + tiles.compactMap { entriesByID[$0.id] }
         if let frontID, let front = entriesByID[frontID] { sequence.append(front) }
         guard !sequence.isEmpty else { return }
 

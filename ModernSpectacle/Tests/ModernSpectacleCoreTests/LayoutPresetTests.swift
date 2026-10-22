@@ -223,3 +223,55 @@ struct PlanReuseTests {
         #expect(PlanValidator.completed(plan, for: req).choices == choices)
     }
 }
+
+@Suite
+struct LaptopLayoutTests {
+    private let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 33, width: 1512, height: 871), isMain: true)
+
+    private func window(_ id: Int, _ bundle: String, _ kind: AppKind, focused: Bool = false) -> WindowInfo {
+        WindowInfo(id: id, app: bundle, bundleID: bundle, kind: kind, title: bundle, frame: CGRect(x: 100, y: 100, width: 700, height: 600), displayID: 0, isFocused: focused, appActiveSecondsAgo: nil)
+    }
+
+    @Test
+    func laptopTemplatesHaveAtMostTwoRegionsAndNoStrip() {
+        for template in LayoutTemplates.small {
+            #expect(!template.hasStack)
+            #expect(template.columns.count <= 2)
+        }
+    }
+
+    @Test
+    func backgroundWindowsHideFullyBehindTheTilesOnALaptop() {
+        // The arrangement that looked messy: Claude and Chrome tiled, five windows in the stack.
+        var req = LayoutRequest(displays: [laptop], windows: [
+            window(7, "claude", .coding, focused: true), window(6, "chrome", .browser),
+            window(3, "iterm", .coding), window(4, "sublime", .coding), window(5, "notes", .other), window(1, "activity", .other),
+        ], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 7
+        let choice = TemplatePlan(summary: "", notes: "", displays: [
+            DisplayChoice(id: 0, template: "small-2col", slots: [TemplateAssignment(slot: "main", window: 7), TemplateAssignment(slot: "second", window: 6)], stack: [3, 4, 5, 1]),
+        ])
+        let plan = LayoutTemplates.plan(from: choice, for: req)
+        let rect = { (id: Int) in plan.placements.first { $0.id == id }!.rect }
+        // Two tiles share the whole width: no strip squeezes them, so Chrome keeps its readable 680 points.
+        #expect(rect(7).minX == 0 && rect(6).maxX == 1512)
+        #expect(rect(6).width >= LayoutTemplates.minimumWidth(for: .browser))
+        // Everything else is exactly behind the tiles: nothing sticks out.
+        for id in [3, 4, 5, 1] {
+            #expect(plan.placements.first { $0.id == id }?.group == "behind")
+            #expect(rect(id) == laptop.visibleFrame)
+        }
+    }
+
+    @Test
+    func wideStackStillPeeks() {
+        let wide = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 3440, height: 1319), isMain: true)
+        var req = LayoutRequest(displays: [wide], windows: [window(1, "a", .coding, focused: true), window(2, "b", .chat)], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.windows = req.windows.map { var w = $0; w.displayID = 0; return w }
+        req.focusedWindowID = 1
+        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [
+            DisplayChoice(id: 0, template: "wide-center", slots: [TemplateAssignment(slot: "main", window: 1)], stack: [2]),
+        ]), for: req)
+        #expect(plan.placements.first { $0.id == 2 }?.group == "peek")
+    }
+}
