@@ -103,12 +103,15 @@ cat > "${CONTENTS_DIR}/PkgInfo" <<'PKGINFO'
 APPL????
 PKGINFO
 
+# Developer ID when available, so local builds carry the same signature as published ones: macOS keeps the
+# Accessibility permission for one signature, and switching between the two leaves the switch on but not working.
 SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
-if [[ -z "${SIGN_IDENTITY}" ]]; then
+for prefix in "Developer ID Application:" "Apple Development:"; do
+  [[ -n "${SIGN_IDENTITY}" ]] && break
   SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*"\(Apple Development:.*\)"/\1/p' \
+    | sed -n "s/.*\"\(${prefix}.*\)\"/\1/p" \
     | head -n 1)"
-fi
+done
 
 if [[ -n "${SIGN_IDENTITY}" ]]; then
   # Hardened runtime always; a secure timestamp too unless signing for development (notarization needs both).

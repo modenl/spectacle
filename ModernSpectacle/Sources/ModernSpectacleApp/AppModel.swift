@@ -111,8 +111,8 @@ final class AppModel {
         SmartArranger.log("blocked: no Accessibility permission")
         notice.show(
             message: L(
-                "Modern Spectacle needs Accessibility permission to move windows. Turn on Modern Spectacle in System Settings → Privacy & Security → Accessibility, then try again.",
-                "Modern Spectacle 需要辅助功能权限才能移动窗口。请在 系统设置 → 隐私与安全性 → 辅助功能 里打开 Modern Spectacle，然后再试一次。"
+                "Modern Spectacle needs Accessibility permission to move windows. Turn on Modern Spectacle in System Settings → Privacy & Security → Accessibility, then try again. If it is already on, select it, remove it with −, and add it again: macOS keeps the permission for the copy it was given to.",
+                "Modern Spectacle 需要辅助功能权限才能移动窗口。请在 系统设置 → 隐私与安全性 → 辅助功能 里打开 Modern Spectacle，然后再试一次。如果已经是打开的，选中它，点「−」删除后重新添加：macOS 只认当初授权的那份副本。"
             ),
             acceptTitle: L("Open Settings", "打开设置"),
             near: mainDisplayFrame,
