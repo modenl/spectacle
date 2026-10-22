@@ -1,10 +1,10 @@
 import AppKit
 import ModernSpectacleCore
 
-/// One hotkey: snapshot the desktop, rank the windows (cached, Apple's on-device model, or locally), fill the display's
-/// template from the ranking, apply it, and learn from what the user moves afterwards. Rankings are pre-computed in the
-/// background when the window set changes, so the hotkey usually applies instantly; pressing it again while the
-/// modifiers are still held cycles through the display's templates without asking the model again.
+/// One hotkey: snapshot the desktop, rank the windows (Apple's on-device model, or locally), fill the display's
+/// template from the ranking, apply it, and learn from what the user moves afterwards. Nothing is computed until the key
+/// goes down: the model is asked then, while the preview shows the template, and the windows move when every key is
+/// let go. A ranking is reused for a while if the same apps are open, so pressing again does not ask the model again.
 @MainActor
 public final class SmartArranger {
     public struct Status: Equatable, Sendable {
@@ -15,10 +15,8 @@ public final class SmartArranger {
 
     public private(set) var status = Status(message: L("Idle", "空闲"), planner: nil, date: nil)
     public var onStatusChange: ((Status) -> Void)?
-    /// True while a ranking is being requested from the model (not for cache hits or background pre-warming).
+    /// True while a ranking is being requested from the model (not for cache hits).
     public var onBusyChange: ((Bool, String) -> Void)?
-    /// Pre-compute a ranking whenever the window set changes. Costs one small API call per change.
-    public var prewarmEnabled = true
 
     private let enumerator: WindowEnumerator
     private let windowController: WindowController
@@ -72,11 +70,9 @@ public final class SmartArranger {
     private let preview = ArrangementPreview()
     private var flagsMonitors: [Any] = []
     private var escapeMonitors: [Any] = []
-    private var prewarmTask: Task<Void, Never>?
     private var restackTask: Task<Void, Never>?
     private var settleTask: Task<Void, Never>?
     private var correctionTask: Task<Void, Never>?
-    private var inFlightSignature: String?
     private var observers: [NSObjectProtocol] = []
     /// Moves we make ourselves also arrive through the window observer; ignore them until this time.
     private var suppressObservationUntil = Date.distantPast
@@ -86,7 +82,6 @@ public final class SmartArranger {
 
     private static let cacheLifetime: TimeInterval = 15 * 60
     private static let correctionDelay: TimeInterval = 12
-    private static let prewarmDebounce: TimeInterval = 5
     private static let userMoveMemory: TimeInterval = 45
     private static let suggestionCooldownInterval: TimeInterval = 10 * 60
 
@@ -111,11 +106,6 @@ public final class SmartArranger {
             let name = app?.localizedName
             Task { @MainActor in self?.noteActivation(bundleID: bundleID, name: name) }
         })
-        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
-            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.schedulePrewarm() }
-            })
-        }
         // Letting go of every modifier applies the previewed arrangement.
         let flagsChanged: (NSEvent) -> Void = { [weak self] event in
             let held = !event.modifierFlags.intersection([.control, .option, .command, .shift]).isEmpty
@@ -131,7 +121,6 @@ public final class SmartArranger {
             self?.noteWindowFocus(pid: pid, title: title)
         }
         windowObserver = observer
-        schedulePrewarm()
     }
 
     public static var defaultHistoryURL: URL {
@@ -201,7 +190,7 @@ public final class SmartArranger {
         if needsModel {
             let id = current.id
             current.pendingRanking = Task { @MainActor [weak self] in
-                let ranking = await self?.rankingWithin(seconds: 4, for: request)
+                let ranking = await self?.rankingWithin(seconds: 10, for: request)
                 guard let self, let ranking, session?.id == id else { return }
                 session?.ranking = ranking
                 showPreview(morphing: true)
@@ -230,7 +219,7 @@ public final class SmartArranger {
     /// The model's ranking, or the local one if the model has not answered within `seconds` (it keeps going and fills
     /// the cache for next time).
     private func rankingWithin(seconds: Double, for request: LayoutRequest) async -> WindowRanking {
-        let model = Task { @MainActor [weak self] in await self?.ranking(for: request, allowNetwork: true) }
+        let model = Task { @MainActor [weak self] in await self?.ranking(for: request, allowModel: true) }
         let timeout = Task { try? await Task.sleep(for: .seconds(seconds)) }
         return await withTaskGroup(of: WindowRanking?.self) { group in
             group.addTask { await model.value }
@@ -399,8 +388,8 @@ public final class SmartArranger {
         return LocalRanker.rank(request)
     }
 
-    private func ranking(for request: LayoutRequest, allowNetwork: Bool) async -> WindowRanking {
-        if hasFreshRanking(for: request.signature) || !allowNetwork {
+    private func ranking(for request: LayoutRequest, allowModel: Bool) async -> WindowRanking {
+        if hasFreshRanking(for: request.signature) || !allowModel {
             return cachedOrLocalRanking(for: request)
         }
         if let ranker = activeRanker {
@@ -672,7 +661,6 @@ public final class SmartArranger {
             if !title.isEmpty { windowFocus["\(bundleID)|\(title)"] = now }
             scheduleActivitySave()
         }
-        schedulePrewarm()
     }
 
     private var activitySaveTask: Task<Void, Never>?
@@ -699,27 +687,6 @@ public final class SmartArranger {
         if let first = focusTimeline.first, first.bundleID == bundleID, first.window != title {
             focusTimeline.insert((bundleID, first.app, String(title.prefix(80)), now), at: 0)
         }
-    }
-
-    private func schedulePrewarm() {
-        guard prewarmEnabled, activeRanker != nil, AccessibilityPermission.isTrusted else { return }
-        prewarmTask?.cancel()
-        prewarmTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.prewarmDebounce))
-            guard !Task.isCancelled else { return }
-            await self?.prewarm()
-        }
-    }
-
-    public func prewarm() async {
-        let now = Date()
-        let request = makeRequest(from: enumerator.snapshot(lastActive: lastActive, windowFocus: windowFocus, now: now), now: now)
-        let signature = request.signature
-        guard !request.windows.isEmpty, inFlightSignature != signature, !hasFreshRanking(for: signature) else { return }
-
-        inFlightSignature = signature
-        defer { inFlightSignature = nil }
-        _ = await ranking(for: request, allowNetwork: true)
     }
 
     /// Everything about the last arrangement, for debugging and the Profile window: what was seen, how the windows
@@ -753,7 +720,7 @@ public final class SmartArranger {
         }
     }
 
-    /// Forget the pre-computed plan so the next arrangement asks the model again.
+    /// Forget the cached ranking so the next arrangement asks the model again.
     public func invalidateCache() {
         cachedRanking = nil
     }
