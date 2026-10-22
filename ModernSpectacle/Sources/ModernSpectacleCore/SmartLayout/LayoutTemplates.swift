@@ -34,27 +34,22 @@ public struct LayoutTemplate: Codable, Equatable, Sendable {
     public var id: String
     public var description: String
     public var columns: [TemplateColumn]
+    /// Display names by language ("en", "zh").
+    public var titles: [String: String]
 
-    public init(id: String, description: String, columns: [TemplateColumn]) {
+    public init(id: String, description: String, columns: [TemplateColumn], titles: [String: String] = [:]) {
         self.id = id
         self.description = description
         self.columns = columns
+        self.titles = titles
     }
 
     public var slotIDs: [String] { columns.flatMap { $0.slots.map(\.id) } }
     public var hasStack: Bool { columns.contains(where: \.isStack) }
 
-    /// Short name for the HUD while cycling templates.
+    /// Short name for the map's caption while cycling templates.
     public var title: String {
-        switch id {
-        case "wide-1-1-n": L("Left · Main · Right column", "左1 · 中1 · 右n")
-        case "wide-1-2-n": L("Left · Two main · Right column", "左1 · 中2 · 右n")
-        case "wide-grid-6", "std-grid-4": L("Grid", "平铺")
-        case "std-main-2", "small-main-2": L("Main · Two on the right", "左主 · 右上下")
-        case "std-2col", "small-2col": L("Two columns", "左右两栏")
-        case "small-monocle": L("One window", "单窗口")
-        default: id
-        }
+        (Localization.isChinese ? titles["zh"] : nil) ?? titles["en"] ?? id
     }
 
     /// Slots in the order they are filled: main, then by distance from main's column (left first on a tie), top to
@@ -121,48 +116,30 @@ public struct TemplatePlan: Codable, Equatable, Sendable {
 public enum LayoutTemplates {
     // MARK: Catalog
 
-    private static func stack(_ share: Double) -> TemplateColumn { TemplateColumn(share: share, isStack: true) }
-    private static func column(_ share: Double, _ slots: [TemplateSlot]) -> TemplateColumn { TemplateColumn(share: share, slots: slots) }
-    private static func single(_ share: Double, _ id: String) -> TemplateColumn { TemplateColumn(share: share, slots: [TemplateSlot(id)]) }
+    // Which templates each display gets comes from the active scheme (LayoutScheme): the built-in one, or a newer
+    // signed one from the server. Three per display size, cycled by pressing M again while ⌃⌥⌘ are held. None has a
+    // stack strip: windows that get no slot wait fully hidden behind the tiles; a column of awareness slots keeps chat,
+    // mail and monitors in view instead.
 
-    // Three templates per display size, cycled by pressing M again while ⌃⌥⌘ are held. None has a stack strip:
-    // windows that get no slot wait fully hidden behind the tiles. A right-hand column of awareness slots takes over
-    // the strip's job of keeping chat, mail and monitors in view, readable instead of as slivers.
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var active: ResolvedScheme = SchemeLoader.builtIn
 
-    /// Ultrawide and 4K displays (3000 points and wider). Main in the center, where the eyes rest
-    /// (Bi & Balakrishnan 2009); the right column holds up to three awareness windows.
-    public static let wide: [LayoutTemplate] = [
-        LayoutTemplate(id: "wide-1-1-n", description: "Left, main in the center, a right column of up to three",
-                       columns: [single(0.22, "left"), single(0.48, "main"), awarenessColumn(0.30)]),
-        LayoutTemplate(id: "wide-1-2-n", description: "Left, two main windows side by side, a right column of up to three",
-                       columns: [single(0.2, "left"), single(0.3, "main"), single(0.3, "second"), awarenessColumn(0.2)]),
-        LayoutTemplate(id: "wide-grid-6", description: "Six windows in a 3 × 2 grid",
-                       columns: [column(1, [TemplateSlot("main"), TemplateSlot("grid-4")]), column(1, [TemplateSlot("grid-2"), TemplateSlot("grid-5")]), column(1, [TemplateSlot("grid-3"), TemplateSlot("grid-6")])]),
-    ]
-
-    /// Ordinary desktop displays (1600 to 3000 points). Three columns would leave each too narrow for a browser.
-    public static let standard: [LayoutTemplate] = [
-        LayoutTemplate(id: "std-main-2", description: "Main on the left (60%), two windows stacked on the right",
-                       columns: [single(0.6, "main"), column(0.4, [TemplateSlot("side-top"), TemplateSlot("side-bottom", awareness: true)])]),
-        LayoutTemplate(id: "std-2col", description: "Two equal columns",
-                       columns: [single(0.5, "main"), single(0.5, "second")]),
-        LayoutTemplate(id: "std-grid-4", description: "Four windows in a 2 × 2 grid",
-                       columns: [column(1, [TemplateSlot("main"), TemplateSlot("grid-3")]), column(1, [TemplateSlot("grid-2"), TemplateSlot("grid-4")])]),
-    ]
-
-    /// Laptop displays (under 1600 points): at most a main window and a right column of two.
-    public static let small: [LayoutTemplate] = [
-        LayoutTemplate(id: "small-main-2", description: "Main on the left (60%), two windows stacked on the right",
-                       columns: [single(0.6, "main"), column(0.4, [TemplateSlot("side-top"), TemplateSlot("side-bottom", awareness: true)])]),
-        LayoutTemplate(id: "small-2col", description: "Two columns, main on the left (55%)",
-                       columns: [single(0.55, "main"), single(0.45, "second")]),
-        LayoutTemplate(id: "small-monocle", description: "The main window fills the display",
-                       columns: [single(1, "main")]),
-    ]
-
-    private static func awarenessColumn(_ share: Double) -> TemplateColumn {
-        TemplateColumn(share: share, slots: (1...3).map { TemplateSlot("right-\($0)", awareness: true) })
+    /// The scheme in use. Set at launch from the cached signed scheme and whenever a newer one arrives.
+    public static var scheme: ResolvedScheme {
+        get { lock.withLock { active } }
+        set { lock.withLock { active = newValue } }
     }
+
+    private static func templates(ofClass id: String) -> [LayoutTemplate] {
+        scheme.classes.first { $0.displayClass.id == id }?.templates ?? []
+    }
+
+    /// Ultrawide and 4K displays. Main in the center, where the eyes rest (Bi & Balakrishnan 2009).
+    public static var wide: [LayoutTemplate] { templates(ofClass: "wide") }
+    /// Ordinary desktop displays: three columns would leave each too narrow for a browser.
+    public static var standard: [LayoutTemplate] { templates(ofClass: "standard") }
+    /// Laptop displays: at most a main window and a right column of two.
+    public static var small: [LayoutTemplate] { templates(ofClass: "small") }
 
     /// Every slot of a template laid out on a display, as if all were filled: the template's shape on its own,
     /// without any windows (shown while the model is still ranking).
@@ -197,35 +174,31 @@ public enum LayoutTemplates {
         return slots.indices.max { slots[$0] < slots[$1] } ?? 0
     }
 
-    /// "wide", "standard" or "small": the key under which the last template used on such a display is remembered.
+    /// The display's class in the scheme ("portrait", "small", "standard", "wide" in the built-in one): the key under
+    /// which the last template used on such a display is remembered.
     public static func sizeClass(of display: DisplayInfo) -> String {
-        let width = display.visibleFrame.width
-        if width >= 3000 { return "wide" }
-        if width >= 1600 { return "standard" }
-        return "small"
+        scheme.displayClass(width: display.visibleFrame.width, height: display.visibleFrame.height).displayClass.id
     }
 
     public static func candidates(for display: DisplayInfo) -> [LayoutTemplate] {
-        let width = display.visibleFrame.width
-        if width >= 3000 { return wide }
-        if width >= 1600 { return standard }
-        return small
+        scheme.displayClass(width: display.visibleFrame.width, height: display.visibleFrame.height).templates
     }
 
     public static func template(id: String) -> LayoutTemplate? {
-        (wide + standard + small).first { $0.id == id }
+        scheme.allTemplates.first { $0.id == id }
     }
 
     // MARK: Readability
 
     /// Narrowest slot in which a window of this kind is still usable (DuoZone's finding: the model happily squeezes
     /// browsers and editors into slots that are too narrow; sizing needs a hard constraint, not a prompt).
+    /// The scheme sets these (never below SchemeLoader.readabilityFloor); built in: browsers 640, editors, terminals
+    /// and assistants 520 (fine in a 1920-wide display's side column), the rest 300.
     public static func minimumWidth(for kind: AppKind) -> CGFloat {
         switch kind {
-        case .browser: 640
-        // Terminals and assistants are fine in a 1920-wide display's side column (576 points); editors still get main.
-        case .coding: 520
-        case .chat, .files, .other, .media: 300
+        case .browser: scheme.readability[.browser] ?? 640
+        case .coding: scheme.readability[.coding] ?? 520
+        case .chat, .files, .other, .media: scheme.readability[.other] ?? 300
         }
     }
 
