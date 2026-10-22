@@ -380,8 +380,9 @@ public enum LayoutTemplates {
     // MARK: Filling a template from a ranking
 
     /// The template's slots filled from the ranking: the focused window in main, then the most relevant windows in the
-    /// slots nearest to it. Awareness slots take awareness windows first, other slots take task windows first; a
-    /// window goes only where it is readable. Background windows and everything left over wait hidden behind.
+    /// slots nearest to it. Awareness slots take awareness windows first, other slots take task windows first, and
+    /// background windows fill what is still free; a window goes only where it is readable. What is left over waits
+    /// hidden behind.
     public static func fill(_ template: LayoutTemplate, on display: DisplayInfo, ranking: WindowRanking, request: LayoutRequest) -> DisplayChoice {
         let onDisplay = request.windows.filter { $0.displayID == display.id }
         let roleOf = Dictionary(ranking.windows.map { ($0.id, $0.role) }, uniquingKeysWith: { a, _ in a })
@@ -403,9 +404,11 @@ public enum LayoutTemplates {
             let fits = { (w: WindowInfo) in slot.id == "main" || width(of: slot) >= minimumWidth(for: w.kind) }
             let role = { (w: WindowInfo) in w.id == request.focusedWindowID ? .task : (roleOf[w.id] ?? .task) }
             let preferred: WindowRole = slot.awareness ? .awareness : .task
-            // Main is never left empty while the display has a window: with nothing else, the most relevant one takes it.
+            // The chosen template is filled as far as there are windows: background only means "last", so a 2 × 2 grid
+            // with four windows on the display shows four. Main is never left empty while the display has a window.
             let pick = remaining.firstIndex { role($0) == preferred && fits($0) }
                 ?? remaining.firstIndex { role($0) != .background && fits($0) }
+                ?? remaining.firstIndex { fits($0) }
                 ?? (slot.id == "main" ? remaining.indices.first : nil)
             guard let index = pick else { continue }
             slots.append(TemplateAssignment(slot: slot.id, window: remaining.remove(at: index).id))

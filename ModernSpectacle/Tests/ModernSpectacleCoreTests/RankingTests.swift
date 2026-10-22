@@ -48,8 +48,8 @@ struct RankingTests {
         let req = request(wide, [window(1, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "slack", .chat), window(4, "mail", .chat), window(5, "music", .media)])
         let choice = LayoutTemplates.fill(LayoutTemplates.wide[0], on: wide, ranking: ranking([(1, .task), (3, .awareness), (2, .task), (4, .awareness), (5, .background)]), request: req)
         let slot = Dictionary(uniqueKeysWithValues: choice.slots.map { ($0.slot, $0.window) })
-        #expect(slot == ["main": 1, "left": 2, "right-1": 3, "right-2": 4]) // background music is not given a slot
-        #expect(choice.stack == [5])
+        #expect(slot == ["main": 1, "left": 2, "right-1": 3, "right-2": 4, "right-3": 5]) // background fills the last free slot
+        #expect(choice.stack.isEmpty)
     }
 
     @Test
@@ -245,5 +245,28 @@ struct MainAndTwoTests {
         #expect(Set(choice.slots.map(\.window)) == [6, 2, 3])
         let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [choice]), for: request)
         #expect(plan.placements.filter { $0.group.hasPrefix("column") }.count == 3)
+    }
+}
+
+
+@Suite
+struct FullTemplateTests {
+    @Test
+    func aGridWithFourWindowsShowsAllFour() {
+        let display = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 30, width: 1920, height: 1092), isMain: true)
+        func window(_ id: Int, _ app: String, _ kind: AppKind, focused: Bool = false) -> WindowInfo {
+            WindowInfo(id: id, app: app, bundleID: app, kind: kind, title: app, frame: CGRect(x: 0, y: 30, width: 900, height: 700), displayID: 0, isFocused: focused, appActiveSecondsAgo: nil)
+        }
+        let request = LayoutRequest(displays: [display], windows: [window(6, "claude", .coding, focused: true), window(2, "iterm", .coding), window(3, "sublime", .coding), window(4, "notes", .other)],
+                                    recentApps: [], corrections: [], notes: "", localTime: "t", focusedWindowID: 6)
+        let ranking = WindowRanking(windows: [RankedWindow(id: 6, role: .task, relevance: 4), RankedWindow(id: 2, role: .task, relevance: 3),
+                                              RankedWindow(id: 3, role: .task, relevance: 2), RankedWindow(id: 4, role: .background, relevance: 1)], source: "claude")
+        let grid = LayoutTemplates.standard.first { $0.id == "std-grid-4" }!
+        let choice = LayoutTemplates.fill(grid, on: display, ranking: ranking, request: request)
+        #expect(choice.slots.count == 4)
+        let plan = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [choice]), for: request)
+        let tiles = plan.placements.filter { $0.group.hasPrefix("column") }
+        #expect(tiles.count == 4)
+        #expect(tiles.allSatisfy { $0.w == 960 && ($0.h == 546 || $0.h == 546) })
     }
 }
