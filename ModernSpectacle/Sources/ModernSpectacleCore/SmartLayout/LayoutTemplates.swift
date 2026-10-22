@@ -164,6 +164,27 @@ public enum LayoutTemplates {
         TemplateColumn(share: share, slots: (1...3).map { TemplateSlot("right-\($0)", awareness: true) })
     }
 
+    /// Every slot of a template laid out on a display, as if all were filled: the template's shape on its own,
+    /// without any windows (shown while the model is still ranking).
+    public static func slotFrames(of template: LayoutTemplate, in frame: CGRect) -> [(slot: TemplateSlot, rect: CGRect)] {
+        let columns = template.columns.filter { !$0.isStack }
+        let total = columns.map(\.share).reduce(0, +)
+        var result: [(TemplateSlot, CGRect)] = []
+        var x = frame.minX
+        for (index, column) in columns.enumerated() {
+            let width = index == columns.count - 1 ? frame.maxX - x : (frame.width * CGFloat(column.share / total)).rounded()
+            let rowTotal = column.slots.map(\.share).reduce(0, +)
+            var y = frame.minY
+            for (row, slot) in column.slots.enumerated() {
+                let height = row == column.slots.count - 1 ? frame.maxY - y : (frame.height * CGFloat(slot.share / rowTotal)).rounded()
+                result.append((slot, CGRect(x: x, y: y, width: width, height: height)))
+                y += height
+            }
+            x += width
+        }
+        return result
+    }
+
     /// "wide", "standard" or "small": the key under which the last template used on such a display is remembered.
     public static func sizeClass(of display: DisplayInfo) -> String {
         let width = display.visibleFrame.width

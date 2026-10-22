@@ -57,14 +57,16 @@ public final class SmartArranger {
         var id = UUID()
         var snapshot: WindowEnumerator.Snapshot
         var request: LayoutRequest
-        var ranking: WindowRanking
-        /// Index into the display's templates, per display.
+        /// Nil while the model is still ranking: the template's shape is shown, the windows wait.
+        var ranking: WindowRanking?
+        /// Index into the display's templates, per display. Independent of the ranking.
         var templateIndex: [Int: Int]
         var focusedDisplay: Int
         var started: Date
         var calledModel: Bool
-        /// The model's ranking while it is still on its way; the preview starts from the local one.
-        var pendingRanking: Task<WindowRanking, Never>?
+        var pendingRanking: Task<Void, Never>?
+        /// The modifiers were let go before the ranking arrived: apply as soon as it does.
+        var released = false
     }
     private var session: Session?
     private let preview = ArrangementPreview()
@@ -205,19 +207,21 @@ public final class SmartArranger {
             let remembered = history.templateChoice[LayoutTemplates.sizeClass(of: display)]
             templateIndex[display.id] = templates.firstIndex { $0.id == remembered } ?? 0
         }
-        var current = Session(snapshot: snapshot, request: request, ranking: cachedOrLocalRanking(for: request), templateIndex: templateIndex,
-                              focusedDisplay: focusedDisplay, started: started, calledModel: needsModel)
+        // The model is called the moment the key goes down; the template is chosen independently while it works.
+        var current = Session(snapshot: snapshot, request: request, ranking: needsModel ? nil : cachedOrLocalRanking(for: request),
+                              templateIndex: templateIndex, focusedDisplay: focusedDisplay, started: started, calledModel: needsModel)
         if needsModel {
             let id = current.id
             current.pendingRanking = Task { @MainActor [weak self] in
-                guard let self else { return LocalRanker.rank(request) }
-                let ranking = await ranking(for: request, allowNetwork: true)
-                // The model's answer arrived while the preview is still up: the cards glide to the better layout.
-                if session?.id == id {
-                    session?.ranking = ranking
-                    showPreview(morphing: true)
+                let ranking = await self?.rankingWithin(seconds: 4, for: request)
+                guard let self, let ranking, session?.id == id else { return }
+                session?.ranking = ranking
+                showPreview(morphing: true)
+                if session?.released == true {
+                    // Let the cards land, then apply.
+                    try? await Task.sleep(for: .seconds(ArrangementPreview.flight + 0.1))
+                    if session?.id == id { await commitPreview() }
                 }
-                return ranking
             }
         }
         session = current
@@ -235,22 +239,58 @@ public final class SmartArranger {
         showPreview(morphing: true)
     }
 
+    /// The model's ranking, or the local one if the model has not answered within `seconds` (it keeps going and fills
+    /// the cache for next time).
+    private func rankingWithin(seconds: Double, for request: LayoutRequest) async -> WindowRanking {
+        let model = Task { @MainActor [weak self] in await self?.ranking(for: request, allowNetwork: true) }
+        let timeout = Task { try? await Task.sleep(for: .seconds(seconds)) }
+        return await withTaskGroup(of: WindowRanking?.self) { group in
+            group.addTask { await model.value }
+            group.addTask { await timeout.value; return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            timeout.cancel()
+            if let first { return first }
+            Self.log("model slower than \(seconds) s, ranked locally")
+            return LocalRanker.rank(request)
+        }
+    }
+
+    private func template(at index: Int?, for display: DisplayInfo) -> LayoutTemplate {
+        let templates = LayoutTemplates.candidates(for: display)
+        return templates[(index ?? 0) % templates.count]
+    }
+
     /// The plan the session would apply right now: every display's template filled from the ranking.
-    private func plan(of current: Session) -> (choices: [DisplayChoice], plan: LayoutPlan) {
+    private func plan(of current: Session, ranking: WindowRanking) -> (choices: [DisplayChoice], plan: LayoutPlan) {
         let request = current.request
         let choices = request.displays.map { display in
-            let templates = LayoutTemplates.candidates(for: display)
-            return LayoutTemplates.fill(templates[(current.templateIndex[display.id] ?? 0) % templates.count], on: display, ranking: current.ranking, request: request)
+            LayoutTemplates.fill(template(at: current.templateIndex[display.id], for: display), on: display, ranking: ranking, request: request)
         }
         let plan = LayoutTemplates.plan(from: TemplatePlan(summary: summary(of: choices, request: request), notes: history.notes, displays: choices), for: request)
         // Frames come from the composer (exact tiling); still clamp and cover anything the design left out.
         return (choices, PlanValidator.completed(PlanValidator.sanitized(plan, for: request), for: request))
     }
 
+    /// The preview shows the template, not the apps: while the model ranks nobody knows yet which app goes where.
+    /// Once the ranking is in, slots that will stay empty fold away so the map matches what will be applied.
     private func showPreview(morphing: Bool) {
         guard let current = session else { return }
-        let (choices, plan) = plan(of: current)
-        let cards = previewCards(for: plan, choices: choices, snapshot: current.snapshot)
+        var slots: [ArrangementPreview.Slot] = []
+        for display in current.request.displays {
+            let template = template(at: current.templateIndex[display.id], for: display)
+            var frames = LayoutTemplates.slotFrames(of: template, in: display.visibleFrame).map { (id: $0.slot.id, awareness: $0.slot.awareness, rect: $0.rect) }
+            if let ranking = current.ranking {
+                let (choices, plan) = plan(of: current, ranking: ranking)
+                if let choice = choices.first(where: { $0.id == display.id }) {
+                    let rectOf = Dictionary(plan.placements.map { ($0.id, $0.rect) }, uniquingKeysWith: { a, _ in a })
+                    frames = frames.compactMap { slot in
+                        choice.slots.first { $0.slot == slot.id }.flatMap { rectOf[$0.window] }.map { (slot.id, slot.awareness, $0) }
+                    }
+                }
+            }
+            slots += frames.map { .init(key: "\(display.id)/\($0.id)", rect: $0.rect, role: $0.id == "main" ? .main : $0.awareness ? .awareness : .tile) }
+        }
         let caption: ArrangementPreview.Caption
         if let display = current.request.displays.first(where: { $0.id == current.focusedDisplay }) {
             let templates = LayoutTemplates.candidates(for: display)
@@ -259,28 +299,17 @@ public final class SmartArranger {
         } else {
             caption = .init(text: "", index: 0, count: 0)
         }
-        if morphing { preview.update(cards, caption: caption) } else { preview.show(cards, caption: caption) }
+        let focused = current.request.windows.first { $0.id == current.request.focusedWindowID }?.frame.cgRect
+        preview.present(slots: slots, caption: caption, waiting: current.ranking == nil, near: focused)
     }
 
-    /// Cards for the preview: where each window is, where it will go, and what it becomes there.
-    private func previewCards(for plan: LayoutPlan, choices: [DisplayChoice], snapshot: WindowEnumerator.Snapshot) -> [ArrangementPreview.Card] {
-        let entries = Dictionary(snapshot.entries.map { ($0.info.id, $0) }, uniquingKeysWith: { a, _ in a })
-        var roleOf: [Int: ArrangementPreview.Role] = [:]
-        var orderOf: [Int: Int] = [:]
-        for choice in choices {
-            guard let template = LayoutTemplates.template(id: choice.template) else { continue }
-            for (position, slot) in template.slotsByNearness.enumerated() {
-                guard let window = choice.slots.first(where: { $0.slot == slot.id })?.window else { continue }
-                roleOf[window] = slot.id == "main" ? .main : (slot.awareness ? .awareness : .tile)
-                orderOf[window] = position
-            }
-        }
-        return plan.placements.compactMap { placement in
-            guard let entry = entries[placement.id] else { return nil }
-            let role = placement.group == "behind" ? .hidden : (roleOf[placement.id] ?? .tile)
-            return ArrangementPreview.Card(id: placement.id, app: entry.info.app, title: entry.info.title, pid: entry.pid,
-                                           from: entry.info.frame.cgRect, to: placement.rect, role: role,
-                                           order: orderOf[placement.id] ?? 20)
+    /// The blocks of a plan, keyed by window, so a window's block can be followed from one plan to the next.
+    private func windowBlocks(_ plan: LayoutPlan, choice: DisplayChoice) -> [ArrangementPreview.Slot] {
+        guard let template = LayoutTemplates.template(id: choice.template) else { return [] }
+        let rectOf = Dictionary(plan.placements.map { ($0.id, $0.rect) }, uniquingKeysWith: { a, _ in a })
+        return template.slotsByNearness.compactMap { slot in
+            guard let window = choice.slots.first(where: { $0.slot == slot.id })?.window, let rect = rectOf[window] else { return nil }
+            return .init(key: "w\(window)", rect: rect, role: slot.id == "main" ? .main : slot.awareness ? .awareness : .tile)
         }
     }
 
@@ -290,15 +319,20 @@ public final class SmartArranger {
         // What the preview shows is what gets applied, at once: a model answer still on its way only fills the cache
         // for next time.
         guard let current = session else { return }
+        guard let ranking = current.ranking else {
+            // Still ranking: keep the preview (and the glow) up and apply when the answer lands.
+            session?.released = true
+            return
+        }
         stopWatchingEscape()
         session = nil
-        let (choices, safe) = plan(of: current)
+        let (choices, safe) = plan(of: current, ranking: ranking)
         let request = current.request
         preview.commit { [weak self] done in
             self?.apply(safe, to: current.snapshot, whenVisible: done)
         }
-        dumpLastArrangement(request: request, ranking: current.ranking, final: safe, rejected: current.snapshot.rejected, apps: current.snapshot.apps)
-        if let notes = current.ranking.notes, !notes.isEmpty {
+        dumpLastArrangement(request: request, ranking: ranking, final: safe, rejected: current.snapshot.rejected, apps: current.snapshot.apps)
+        if let notes = ranking.notes, !notes.isEmpty {
             history.notes = String(notes.prefix(2000))
         }
         remember(choices, windows: request.windows)
@@ -307,7 +341,7 @@ public final class SmartArranger {
             history.templateChoice[LayoutTemplates.sizeClass(of: display)] = templates[(current.templateIndex[display.id] ?? 0) % templates.count].id
         }
         let elapsed = Int(Date().timeIntervalSince(current.started) * 1000)
-        let source = current.ranking.source + (current.calledModel ? "" : " cached")
+        let source = ranking.source + (current.calledModel ? "" : " cached")
         history.record(ArrangementRecord(date: current.started, planner: source, summary: safe.summary, windowCount: safe.placements.count, durationMs: elapsed))
         saveHistory()
         update("\(safe.summary) (\(source), \(elapsed) ms)", planner: source)
@@ -800,9 +834,10 @@ public final class SmartArranger {
         var composed = LayoutComposer.plan(from: plan, for: request)
         composed.choices = [choice]
         let safe = PlanValidator.sanitized(composed, for: request)
-        // The window flies into main and the old main flies out to its new place, then the windows follow.
-        let cards = previewCards(for: safe, choices: [choice], snapshot: snapshot).filter { $0.from.integral != $0.to.integral }
-        preview.flash(cards, caption: .init(text: L("Bring to Main", "移到主位"), index: 0, count: 0)) { [weak self] done in
+        // The block of the window flies into main and the old main's block flies out to its new place.
+        let before = LayoutTemplates.plan(from: TemplatePlan(summary: "", notes: "", displays: [previous]), for: request)
+        preview.flash(from: windowBlocks(before, choice: previous), to: windowBlocks(safe, choice: choice),
+                      caption: .init(text: L("Bring to Main", "移到主位"), index: 0, count: 0)) { [weak self] done in
             self?.apply(safe, to: snapshot, frontID: focused.id, whenVisible: done)
         }
         remember(safe.choices, windows: request.windows)

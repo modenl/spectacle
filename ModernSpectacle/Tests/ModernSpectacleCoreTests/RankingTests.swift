@@ -172,3 +172,17 @@ struct LearnedWidthTests {
         #expect(before.signature != more.signature) // a new window is a new situation
     }
 }
+
+@Suite
+struct SlotFrameTests {
+    @Test
+    func aTemplatesSlotsTileTheDisplayExactly() {
+        let frame = CGRect(x: 0, y: 33, width: 1512, height: 871)
+        let slots = LayoutTemplates.slotFrames(of: LayoutTemplates.small[0], in: frame)
+        #expect(slots.map(\.slot.id) == ["main", "side-top", "side-bottom"])
+        #expect(slots[0].rect == CGRect(x: 0, y: 33, width: 907, height: 871))
+        #expect(slots[1].rect.minX == 907 && slots[1].rect.maxX == 1512)
+        #expect(slots[1].rect.maxY == slots[2].rect.minY && slots[2].rect.maxY == frame.maxY)
+        #expect(slots[2].slot.awareness)
+    }
+}

@@ -101,6 +101,7 @@ final class AppModel {
         case "press": if requireAccessibility() { smartArranger.smartArrangeKey(holding: true) }
         case "release": smartArranger.releaseModifiers()
         case "cancel": smartArranger.cancelPreview()
+        case "forget": smartArranger.invalidateCache() // next press asks the model again
         default:
             if let action = WindowAction(rawValue: command) { perform(action) }
         }
