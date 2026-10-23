@@ -5,16 +5,12 @@ import ModernSpectacleCore
 @MainActor
 public final class HotKeyCenter {
     public typealias ActionHandler = @MainActor (WindowAction) -> Void
-    /// Receives the 0-based preset number for ⌃⌥⌘1…9.
-    public typealias PresetHandler = @MainActor (Int) -> Void
 
     private var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
     private var actionsByIdentifier: [UInt32: WindowAction] = [:]
-    private var presetsByIdentifier: [UInt32: Int] = [:]
     private var eventHandlerRef: EventHandlerRef?
     private var nextIdentifier: UInt32 = 0
     private var handler: ActionHandler?
-    private var presetHandler: PresetHandler?
 
     public init() {
         installEventHandler()
@@ -30,21 +26,12 @@ public final class HotKeyCenter {
     }
 
     /// Registers the shortcuts in effect (defaults plus the user's changes); call again after they change.
-    public func registerShortcuts(handler: @escaping ActionHandler, presetHandler: PresetHandler? = nil) {
+    public func registerShortcuts(handler: @escaping ActionHandler) {
         self.handler = handler
-        self.presetHandler = presetHandler
         unregisterAll()
 
         for binding in ShortcutStore.bindings() {
             register(binding)
-        }
-        if presetHandler != nil {
-            let modifiers = UInt32(cmdKey) | UInt32(optionKey) | UInt32(controlKey)
-            for (index, keyCode) in DefaultShortcutBindings.presetKeyCodes.enumerated() {
-                if let identifier = register(keyCode: keyCode, modifiers: modifiers) {
-                    presetsByIdentifier[identifier] = index
-                }
-            }
         }
     }
 
@@ -54,7 +41,6 @@ public final class HotKeyCenter {
         }
         hotKeyRefs.removeAll()
         actionsByIdentifier.removeAll()
-        presetsByIdentifier.removeAll()
     }
 
     private func register(_ binding: ShortcutBinding) {
@@ -130,10 +116,6 @@ public final class HotKeyCenter {
     }
 
     private func invoke(identifier: UInt32) {
-        if let preset = presetsByIdentifier[identifier] {
-            presetHandler?(preset)
-            return
-        }
         guard let action = actionsByIdentifier[identifier] else {
             return
         }

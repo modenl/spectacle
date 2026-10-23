@@ -150,14 +150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let delete = NSMenuItem(title: L("Delete Layout", "删除布局"), action: nil, keyEquivalent: "")
         let deleteMenu = NSMenu(title: L("Delete Layout", "删除布局"))
         for (index, preset) in presets.enumerated() {
-            let item = menuItem(preset.name) { [weak self] in self?.model.restorePreset(at: index) }
-            item.keyEquivalent = "\(index + 1)"
-            item.keyEquivalentModifierMask = [.control, .option, .command]
-            item.isEnabled = model.shortcutsEnabled
-            restoreMenu.addItem(item)
+            restoreMenu.addItem(menuItem(preset.name) { [weak self] in self?.model.restorePreset(at: index) })
             deleteMenu.addItem(menuItem(preset.name) { [weak self] in self?.model.deletePreset(named: preset.name) })
         }
-        restoreMenu.autoenablesItems = false
         restore.submenu = restoreMenu
         restore.isEnabled = !presets.isEmpty
         menu.addItem(restore)

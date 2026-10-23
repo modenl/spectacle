@@ -182,9 +182,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             shortcutButtons[action] = button
             grid.addRow(with: [NSTextField(labelWithString: action.title), button])
         }
-        let presetShortcut = NSTextField(labelWithString: "⌃⌥⌘1…9")
-        presetShortcut.textColor = .secondaryLabelColor
-        grid.addRow(with: [NSTextField(labelWithString: L("Restore Saved Layout", "恢复保存的布局")), presetShortcut])
         stack.addArrangedSubview(grid)
         stack.addArrangedSubview(shortcutMessage)
         stack.addArrangedSubview(NSButton(title: L("Restore Default Shortcuts", "恢复默认快捷键"), target: self, action: #selector(resetShortcuts)))
@@ -255,8 +252,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         switch ShortcutStore.problem(keyCode: keyCode, modifiers: modifiers, for: action, in: ShortcutStore.bindings()) {
         case .needsModifier:
             showProblem(L("Use at least one of ⌃ ⌥ ⌘ (or a function key).", "至少要带 ⌃ ⌥ ⌘ 中的一个（功能键除外）。"))
-        case .reservedForLayouts:
-            showProblem(L("⌃⌥⌘ with a digit restores saved layouts.", "⌃⌥⌘ 加数字用于恢复保存的布局。"))
         case let .usedBy(other):
             showProblem(L("Already used by \(other.title).", "已被「\(other.title)」使用。"))
         case nil:

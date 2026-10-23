@@ -135,7 +135,7 @@ struct ShortcutStoreTests {
         #expect(ShortcutStore.problem(keyCode: 46, modifiers: 0, for: .center, in: current) == .needsModifier)
         #expect(ShortcutStore.problem(keyCode: 46, modifiers: CarbonModifiers.shift, for: .center, in: current) == .needsModifier)
         #expect(ShortcutStore.problem(keyCode: 122, modifiers: 0, for: .center, in: current) == nil) // F1 alone is fine
-        #expect(ShortcutStore.problem(keyCode: 19, modifiers: cmdOptCtrl, for: .center, in: current) == .reservedForLayouts)
+        #expect(ShortcutStore.problem(keyCode: 19, modifiers: cmdOptCtrl, for: .center, in: current) == nil) // ⌃⌥⌘2 is free
         #expect(ShortcutStore.problem(keyCode: 46, modifiers: cmdOptCtrl, for: .center, in: current) == .usedBy(.smartArrange))
         #expect(ShortcutStore.problem(keyCode: 46, modifiers: cmdOptCtrl, for: .smartArrange, in: current) == nil) // its own
     }

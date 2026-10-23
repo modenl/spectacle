@@ -43,7 +43,7 @@ public struct LayoutHistory: Codable, Equatable, Sendable {
     public var appStyles: [String: ArrangementStyle] = [:]
     /// Recent app/window switches, newest first, so a relaunch still knows what the person was doing.
     public var activity: [ActivityRecord] = []
-    /// Named layouts the user saved; restored with ⌃⌥⌘1…9 in this order.
+    /// Named layouts the user saved, in the order the Restore Layout menu lists them.
     public var presets: [LayoutPreset] = []
     /// The template last chosen for each size of display ("wide", "standard", "small"); the next arrangement starts there.
     public var templateChoice: [String: String] = [:]

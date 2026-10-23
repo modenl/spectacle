@@ -14,9 +14,6 @@ public struct ShortcutBinding: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum DefaultShortcutBindings {
-    /// Key codes of 1…9 on the number row; ⌃⌥⌘ plus a digit restores the saved layout with that number.
-    public static let presetKeyCodes: [UInt32] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
-
     public static func all(
         command: UInt32,
         option: UInt32,
@@ -88,8 +85,6 @@ public enum KeyNames {
 /// action -> [keyCode, modifiers]; an empty array means the user removed the shortcut.
 public enum ShortcutStore {
     public static let defaultsKey = "shortcuts"
-    /// ⌃⌥⌘ plus 1…9 restores saved layouts; those combinations are not available for actions.
-    public static let presetModifiers = CarbonModifiers.control | CarbonModifiers.option | CarbonModifiers.command
 
     public static var defaults: [ShortcutBinding] {
         DefaultShortcutBindings.all(command: CarbonModifiers.command, option: CarbonModifiers.option, control: CarbonModifiers.control, shift: CarbonModifiers.shift)
@@ -121,7 +116,6 @@ public enum ShortcutStore {
     public enum Problem: Equatable, Sendable {
         case needsModifier
         case usedBy(WindowAction)
-        case reservedForLayouts
     }
 
     /// Why a combination cannot be used for `action`, or nil when it can.
@@ -129,9 +123,6 @@ public enum ShortcutStore {
         let mods = modifiers & CarbonModifiers.all
         if mods & (CarbonModifiers.control | CarbonModifiers.option | CarbonModifiers.command) == 0, !KeyNames.isFunctionKey(keyCode) {
             return .needsModifier
-        }
-        if mods == presetModifiers, (18...29).contains(keyCode), keyCode != 24, keyCode != 27, keyCode != 29 {
-            return .reservedForLayouts
         }
         if let other = current.first(where: { $0.action != action && $0.keyCode == keyCode && $0.carbonModifiers == mods }) {
             return .usedBy(other.action)

@@ -9,13 +9,13 @@ Why these layouts: every rule comes from research
 • Windows you keep an eye on stay visible. Hutchings and Stasko (GI 2004) found that half of the people they interviewed deliberately left a corner of a covered window showing as a reminder. On large displays a right-hand column holds chat, mail and monitors, fully readable; everything else waits whole behind the tiles, with no slivers.
 • Your layout does not jump around. When interface elements move, people have to learn their positions again (Scarr, Cockburn and Gutwin's review of spatial memory). So arranging again keeps the template you chose last time, recognizes windows whose titles changed, and only fills free slots or the background with new windows.
 • AI only decides which windows matter; positions and sizes are computed on your Mac. In DuoZone's 16-person study (2025), letting AI make the semantic call while sizes were computed locally made layout tasks 34.5% faster with clearly lower mental load; the same study found AI-chosen sizes were close to random. ModernSpectacle goes further: the model only ranks windows, templates and sizes are computed locally, and readability floors (browsers at least 640 points wide) keep windows out of slots too small for them.
-• Layouts you can save. DuoZone and a 2026 mixed-reality placement study both found people want to save favorite layouts and bring them back in one step. That is ⌃⌥⌘1…9.
+• Layouts you can save. DuoZone and a 2026 mixed-reality placement study both found people want to save favorite layouts and bring them back in one step. That is Save Layout and Restore Layout in the menu.
 
 Features
 • Smart Arrange, ⌃⌥⌘M (hold ⌃⌥⌘ with the left hand, press M with the right): a small preview shows the layout while Jev, TypeSafe's decision model, works out from your focus and recent switches which windows belong to the current task and which you only keep an eye on. It answers in about 0.2 seconds. Let go to apply, Esc to cancel. Keep holding and press M again to switch templates: laptop "Main · Two on the right", "Two columns", "One window"; standard monitor "Main · Two on the right", "Two columns", "Grid"; ultrawide "Left · Main · Right column", "Left · Two main · Right column", "Grid"; portrait "Main · Two below", "Two rows", "One window".
 • Only the display you are working on is arranged.
 • Bring to Main, ⌃⌥⌘↩: swaps the current window into the main slot and moves the old main window into the slot it left. Done locally, no model call.
-• Saved layouts: Save Layout… in the menu names the current arrangement; ⌃⌥⌘1…9 brings it back, finding windows by app and title and moving them back to their display.
+• Saved layouts: Save Layout… in the menu names the current arrangement; Restore Layout in the menu brings it back, finding windows by app and title and moving them back to their display.
 • Learns your habits: if you move windows after an arrangement it remembers; if you spread out several windows of one app by hand, it offers to do the rest.
 • Classic shortcuts: ⌥⌘←/→/↑/↓ halves, ⌃⌘←/→ and ⌃⇧⌘←/→ corners, ⌥⌘C center, ⌥⌘F maximize, ⌃⌥←/→ thirds, ⌃⌥⌘←/→ next and previous display, ⌃⌥⇧←/→ larger and smaller, ⌥⌘Z / ⌥⇧⌘Z undo and redo. Every shortcut can be changed in Settings.
 • English and Chinese, following the system by default; switch in Settings.
@@ -47,13 +47,13 @@ ModernSpectacle 是一个 macOS 菜单栏窗口管理工具。按一个键，它
 • 只需留意的窗口放在看得见的地方。Hutchings 与 Stasko（GI 2004）访谈发现，一半用户会刻意让被遮住的窗口露出一角，起提醒作用。大屏的右侧一列专门放聊天、邮件、监视器这类窗口，完整可读；其余窗口整块藏在后面，不露碎片。
 • 不乱动你的布局。界面元素一重排，用户就得重新记位置（Scarr、Cockburn、Gutwin 的空间记忆综述）。所以再次排列时沿用你上次选的模版，标题变了的窗口也认得出来；新窗口只填空位或放到后台。
 • AI 只判断「哪些窗口重要」，位置和尺寸都由本机算法决定。DuoZone（2025）的 16 人对照实验里，「AI 做语义判断、本地算尺寸」的方式让布局任务快了 34.5%、认知负荷显著降低；同一研究也发现，让 AI 直接给尺寸，结果近乎随机。ModernSpectacle 的分工更进一步：模型只给窗口排序，模版和尺寸全在本机算，还设了可读性下限（浏览器至少 640 点宽），不会把窗口塞进放不下的格子。
-• 能保存的布局。DuoZone 和 2026 年的混合现实摆放研究都发现，用户希望把常用布局存成预设、一键恢复。⌃⌥⌘1…9 就是这个功能。
+• 能保存的布局。DuoZone 和 2026 年的混合现实摆放研究都发现，用户希望把常用布局存成预设、一键恢复。菜单里的「保存布局」「恢复布局」就是这个功能。
 
 主要功能
 • 智能排列 ⌃⌥⌘M（左手按住 ⌃⌥⌘，右手按 M）：先弹出小地图预览布局，同时 Jev（TypeSafe 的决策模型）根据焦点和最近的切换，判断哪些窗口属于当前任务、哪些只需留意，约 0.2 秒返回。松手生效，Esc 取消。不松开 ⌃⌥⌘ 再按 M，可以切换模版：笔记本是「左主·右上下」「左右两栏」「单窗口」，普通显示器是「左主·右上下」「左右两栏」「平铺」，超宽屏是「左1·中1·右n」「左1·中2·右n」「平铺」，竖屏是「上主·下两格」「上下两栏」「单窗口」
 • 只排列你正在用的那块屏幕
 • 移到主位 ⌃⌥⌘↩：把当前窗口换到主位，原来的主窗口退到它腾出的位置，本地完成，不调用模型
-• 保存布局：菜单里「保存布局…」给当前排列起名，⌃⌥⌘1…9 一键恢复。按应用和窗口标题找回窗口，跨屏也会移回去
+• 保存布局：菜单里「保存布局…」给当前排列起名，「恢复布局」一键恢复。按应用和窗口标题找回窗口，跨屏也会移回去
 • 学习你的习惯：排完你再挪动，它会记住；你手动把一个 App 的几个窗口铺开，它会主动问要不要把剩下的也铺上
 • 经典快捷键：⌥⌘←/→/↑/↓ 半屏，⌃⌘←/→、⌃⇧⌘←/→ 四角，⌥⌘C 居中，⌥⌘F 最大化，⌃⌥←/→ 三分之一，⌃⌥⌘←/→ 跨屏，⌃⌥⇧←/→ 放大缩小，⌥⌘Z / ⌥⇧⌘Z 撤销重做。所有快捷键都可以在设置里改
 • 中英双语界面，默认跟随系统，可在设置里切换

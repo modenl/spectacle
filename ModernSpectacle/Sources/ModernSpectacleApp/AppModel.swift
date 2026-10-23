@@ -167,10 +167,7 @@ final class AppModel {
     }
 
     private func registerShortcuts() {
-        hotKeys.registerShortcuts(
-            handler: { [weak self] action in self?.perform(action) },
-            presetHandler: { [weak self] index in self?.restorePreset(at: index) }
-        )
+        hotKeys.registerShortcuts(handler: { [weak self] action in self?.perform(action) })
     }
 
     // MARK: - Presets

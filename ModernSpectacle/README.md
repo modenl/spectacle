@@ -17,7 +17,7 @@ The app is structured as a Swift package so the deterministic layout engine can 
 - The classic Spectacle shortcuts (halves, quarters, thirds, displays, undo/redo).
 - Smart Arrange (⌃⌥⌘M): Jev, TypeSafe's decision model, ranks the windows by what you are doing (one request, typed answers, about a second); the display's template is filled from that ranking. Press M again while still holding ⌃⌥⌘ to switch between the display's three templates. Without a Jev key, windows are ranked on the Mac by focus and recency. The key comes from Settings, or is built in: put it in `jev.key` next to `build-app.sh` (gitignored) and every build bundles it. Anyone who has the app can read a built-in key. Bring to Main (⌃⌥⌘↩) swaps the focused window into the main slot.
 - Every shortcut can be changed in Settings.
-- Saved layouts: Save Layout… in the menu names the current arrangement; ⌃⌥⌘1…9 restores it, matching windows by app and title and moving them back to their display.
+- Saved layouts: Save Layout… in the menu names the current arrangement; Restore Layout in the menu brings it back, matching windows by app and title and moving them back to their display. No shortcuts are taken for this, so ⌃⌥⌘ with a digit stays free.
 - English and Simplified Chinese UI, following the system language or the choice in Settings.
 - Self-update: Sparkle checks the store's appcast (store.alvumo.xyz/app/modern-spectacle/appcast.xml) once a day and from the menu. When a newer version is out it asks, then downloads, checks the EdDSA signature against `SUPublicEDKey`, replaces the app and relaunches it.
 
