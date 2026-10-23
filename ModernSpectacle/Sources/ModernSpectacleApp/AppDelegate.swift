@@ -70,8 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
-        menu.addItem(menuItem(L("About Modern Spectacle", "关于 Modern Spectacle")) {
-            NSApp.orderFrontStandardAboutPanel(nil)
+        menu.addItem(menuItem(L("About Modern Spectacle", "关于 Modern Spectacle")) { [weak self] in
+            self?.model.showAbout()
         })
 
         menu.addItem(menuItem(L("Check for Updates...", "检查更新...")) { [weak self] in

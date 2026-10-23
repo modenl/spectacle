@@ -74,7 +74,7 @@ final class AppModel {
             }
         }
         // `spectacle-cli trigger <command> [argument]` posts this: any WindowAction by name, restore <n>, save <name>,
-        // delete <name>, check-updates, check-updates-quietly, quit, show-notices. Lets every feature be exercised without pressing keys.
+        // delete <name>, check-updates, check-updates-quietly, about, quit, show-notices. Lets every feature be exercised without pressing keys.
         commandObserver = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("xyz.alvumo.ModernSpectacle.command"), object: nil, queue: .main
         ) { [weak self] note in
@@ -93,6 +93,7 @@ final class AppModel {
         case "delete": smartArranger.deletePreset(named: argument)
         case "check-updates": updater.checkNow()
         case "check-updates-quietly": updater.checkInBackground()
+        case "about": showAbout()
         case "quit": NSApp.terminate(nil) // a normal quit, so Sparkle installs a downloaded update
         // Shows the permission notice and the HUD with sample text, to check their layout.
         case "show-notices":
@@ -296,6 +297,12 @@ final class AppModel {
         if shortcutsEnabled { registerShortcuts() }
         onMenuChange?()
         onChange?()
+    }
+
+    /// A menu bar app is not active when its menu is used, and the About panel stays hidden until it is.
+    func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
     }
 
     func showSettings() {
