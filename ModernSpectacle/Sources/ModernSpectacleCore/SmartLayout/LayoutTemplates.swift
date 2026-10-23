@@ -154,13 +154,14 @@ public enum LayoutTemplates {
         return result
     }
 
-    /// The template a press starts with: the one the person chose last for this size of display, unless it has too few
-    /// slots for the windows that want one (`needed`, from the local ranking, known before the model answers), in which
-    /// case the smallest template that has enough, or the largest one. Returns an index into `candidates`.
+    /// The template a press starts with: the one in use, that is the one the person chose last for this size of display,
+    /// so the first press keeps the layout and only a second press switches it. With nothing remembered yet, the
+    /// smallest template with a slot for every window that wants one (`needed`, from the local ranking, known before
+    /// the model answers), or the largest one. Returns an index into `candidates`.
     public static func startingTemplate(in candidates: [LayoutTemplate], remembered: String?, needed: Int) -> Int {
+        if let index = candidates.firstIndex(where: { $0.id == remembered }) { return index }
         let slots = candidates.map(\.slotIDs.count)
         let want = min(max(needed, 1), slots.max() ?? 1)
-        if let index = candidates.firstIndex(where: { $0.id == remembered }), slots[index] >= want { return index }
         let fitting = slots.indices.filter { slots[$0] >= want }
         if let smallest = fitting.min(by: { (slots[$0], $0) < (slots[$1], $1) }) { return smallest }
         return slots.indices.max { slots[$0] < slots[$1] } ?? 0

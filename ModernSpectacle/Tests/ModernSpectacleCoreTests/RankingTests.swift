@@ -211,20 +211,22 @@ struct ActiveDisplayTests {
 @Suite
 struct StartingTemplateTests {
     @Test
-    func theRememberedTemplateIsKeptWhileItHasRoom() {
+    func theFirstPressKeepsTheLayoutInUse() {
         let standard = LayoutTemplates.standard // main+2 (3), two columns (2), grid (4)
-        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 2) == 1)
         #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 1) == 1)
+        // Even with more windows than slots: switching is what the second press is for.
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 3) == 1)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-main-2", needed: 9) == 0)
     }
 
     @Test
-    func tooFewSlotsMovesUpToTheSmallestThatFits() {
+    func withNothingRememberedTheSmallestThatFitsIsChosen() {
         let standard = LayoutTemplates.standard
-        // Two columns remembered, but Claude, iTerm and Sublime all want a place: main + two on the right.
-        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 3) == 0)
-        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 4) == 2)
-        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "std-2col", needed: 9) == 2) // the largest
         #expect(LayoutTemplates.startingTemplate(in: standard, remembered: nil, needed: 2) == 1)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: nil, needed: 3) == 0)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: nil, needed: 4) == 2)
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: nil, needed: 9) == 2) // the largest
+        #expect(LayoutTemplates.startingTemplate(in: standard, remembered: "gone", needed: 3) == 0) // not in this scheme
     }
 }
 

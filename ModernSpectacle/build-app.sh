@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="ModernSpectacle"
 PRODUCT_NAME="ModernSpectacle"
 BUNDLE_ID="${BUNDLE_ID:-xyz.alvumo.ModernSpectacle}"
-VERSION="0.3.4"
+VERSION="0.3.5"
 CONFIGURATION="${CONFIGURATION:-release}"
 # Space-separated list, e.g. ARCHS="arm64 x86_64" for a universal binary.
 ARCHS="${ARCHS:-}"
