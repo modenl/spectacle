@@ -199,6 +199,18 @@ public enum LayoutComposer {
                 x += width + gap
             }
 
+            // A hidden window of an app that also has a tile waits under that tile, not across the whole display:
+            // raising the tile makes its app frontmost, which can bring the app's other windows up too, and a
+            // full-display window would then cover the other apps' tiles. The tile is raised after it, so it stays on top.
+            var tileOfApp: [String: CGRect] = [:]
+            for placement in placements where placement.group.hasPrefix("column") {
+                if let app = windowOf[placement.id]?.bundleID, tileOfApp[app] == nil { tileOfApp[app] = placement.rect }
+            }
+            placements = placements.map { placement in
+                guard placement.group == "behind", let app = windowOf[placement.id]?.bundleID, let tile = tileOfApp[app] else { return placement }
+                return Placement(id: placement.id, group: "behind", rect: tile)
+            }
+
             placements += zip(peekIDs, peekFrames(count: peekIDs.count, in: frame, stripWidth: stripWidth)).map { Placement(id: $0, group: "peek", rect: $1) }
 
             let sizes = cascadeIDs.map { id -> CGSize in

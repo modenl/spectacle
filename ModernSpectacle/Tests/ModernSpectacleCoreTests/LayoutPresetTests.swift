@@ -221,6 +221,33 @@ struct LaptopLayoutTests {
 }
 
 @Suite
+struct SameAppBackgroundTests {
+    private let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 33, width: 1512, height: 871), isMain: true)
+
+    private func window(_ id: Int, _ bundle: String, _ kind: AppKind, focused: Bool = false) -> WindowInfo {
+        WindowInfo(id: id, app: bundle, bundleID: bundle, kind: kind, title: "\(bundle) \(id)", frame: CGRect(x: 0, y: 33, width: 800, height: 600), displayID: 0, isFocused: focused, appActiveSecondsAgo: nil)
+    }
+
+    @Test
+    func aSecondWindowOfATiledAppWaitsUnderItsTile() {
+        // Two Chrome windows: one tiled, the other hidden. Raising the tile brings Chrome to the front, and a hidden
+        // Chrome window across the whole display would then cover Claude.
+        var req = LayoutRequest(displays: [laptop], windows: [
+            window(7, "claude", .coding, focused: true), window(6, "chrome", .browser), window(8, "chrome", .browser), window(5, "notes", .other),
+        ], recentApps: [], corrections: [], notes: "", localTime: "t")
+        req.focusedWindowID = 7
+        let choice = TemplatePlan(summary: "", notes: "", displays: [
+            DisplayChoice(id: 0, template: "small-2col", slots: [TemplateAssignment(slot: "main", window: 7), TemplateAssignment(slot: "second", window: 6)], stack: [8, 5]),
+        ])
+        let plan = LayoutTemplates.plan(from: choice, for: req)
+        let placement = { (id: Int) in plan.placements.first { $0.id == id }! }
+        #expect(placement(8).group == "behind")
+        #expect(placement(8).rect == placement(6).rect) // under the Chrome tile, not over Claude
+        #expect(placement(5).rect == laptop.visibleFrame) // other apps still fill the display behind everything
+    }
+}
+
+@Suite
 struct PromotionMatchingTests {
     private let laptop = DisplayInfo(id: 0, visibleFrame: CGRect(x: 0, y: 33, width: 1512, height: 871), isMain: true)
 
