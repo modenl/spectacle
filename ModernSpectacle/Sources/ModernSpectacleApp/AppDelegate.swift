@@ -51,7 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = item.button {
             button.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "Modern Spectacle")
             button.image?.isTemplate = true
-            button.toolTip = "Modern Spectacle"
+            // No tooltip: the icon changes while arranging, and a status item tooltip shown at that moment can stay
+            // stuck on screen. VoiceOver reads the image's accessibility description instead.
         }
 
         item.menu = buildMenu()
