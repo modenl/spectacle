@@ -160,8 +160,13 @@ public struct ManagedWindow: Equatable, @unchecked Sendable {
         if enhanced { AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue) }
     }
 
+    /// Raises this window within its app, without making the app frontmost.
+    public func raise() {
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
     /// This window on top of everything: raised within its app, made the app's main window, and the app made frontmost.
-    /// Only this window comes forward, not the app's other windows.
+    /// Making the app frontmost brings its other windows forward too, above other apps' windows.
     public func bringToFront(pid: pid_t) {
         AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)

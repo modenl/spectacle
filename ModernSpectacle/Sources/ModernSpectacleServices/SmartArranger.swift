@@ -430,7 +430,8 @@ public final class SmartArranger {
     private func apply(_ plan: LayoutPlan, to snapshot: WindowEnumerator.Snapshot, frontID: Int? = nil, whenVisible: (@MainActor () -> Void)? = nil) {
         let entriesByID = Dictionary(snapshot.entries.map { ($0.info.id, $0) }, uniquingKeysWith: { first, _ in first })
         suppressObservationUntil = Date().addingTimeInterval(3)
-        let jobs = plan.placements.compactMap { placement -> (job: MoveJob, hidden: Bool)? in
+        let placements = Self.placementsToApply(plan, entriesByID: entriesByID)
+        let jobs = placements.compactMap { placement -> (job: MoveJob, hidden: Bool)? in
             guard let entry = entriesByID[placement.id] else { return nil }
             return (MoveJob(window: entry.window, pid: entry.pid, target: placement.rect, app: entry.info.app, bundleID: entry.info.bundleID), placement.group == "behind")
         }
@@ -445,11 +446,21 @@ public final class SmartArranger {
             if !moved.isEmpty {
                 windowController.pushUndo(moved.map { ($0.job.window, $0.before) })
             }
-            Self.log("apply: moved \(moved.count) of \(plan.placements.count), visible in \(visibleMs) ms, all in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            Self.log("apply: moved \(moved.count) of \(placements.count) (\(plan.placements.count - placements.count) hidden left in place), visible in \(visibleMs) ms, all in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
             suppressObservationUntil = Date().addingTimeInterval(2)
-            settle(plan, entriesByID: entriesByID, displays: snapshot.displays)
+            settle(placements, entriesByID: entriesByID, displays: snapshot.displays)
             let front = frontID ?? snapshot.windows.first { $0.isFocused }?.id
-            restack(plan, entriesByID: entriesByID, frontID: front)
+            restack(placements, entriesByID: entriesByID, frontID: front)
+        }
+    }
+
+    /// Hidden background windows stay where they are: the tiles cover the display, so wherever they are they cannot be
+    /// seen, and moving or raising them only costs time. The exception is a hidden window of an app that also has a
+    /// tile (it waits under that tile, see LayoutDesign): bringing that app forward brings it up too.
+    private static func placementsToApply(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry]) -> [Placement] {
+        let tiledApps = Set(plan.placements.filter { $0.group != "behind" }.compactMap { entriesByID[$0.id]?.pid })
+        return plan.placements.filter { placement in
+            placement.group != "behind" || entriesByID[placement.id].map { tiledApps.contains($0.pid) } == true
         }
     }
 
@@ -485,7 +496,7 @@ public final class SmartArranger {
 
     /// Some apps resize asynchronously (Sublime Text) and drop a size change that arrives while the previous one is
     /// still in flight, so a window can end up moved but not resized. Check shortly after and set it again, twice at most.
-    private func settle(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], displays: [DisplayInfo]) {
+    private func settle(_ placements: [Placement], entriesByID: [Int: WindowEnumerator.Entry], displays: [DisplayInfo]) {
         settleTask?.cancel()
         settleTask = Task { @MainActor in
             // Asynchronous apps get time: two passes just ask again, the last one accepts a window that will not shrink.
@@ -494,7 +505,7 @@ public final class SmartArranger {
                 try? await Task.sleep(for: .milliseconds(waits[pass]))
                 guard !Task.isCancelled else { return }
                 var retried = 0
-                for placement in plan.placements {
+                for placement in placements {
                     guard let entry = entriesByID[placement.id], let actual = entry.window.frame else { continue }
                     let window = entry.window
                     var target = placement.rect
@@ -523,24 +534,38 @@ public final class SmartArranger {
         }
     }
 
-    /// Peeking windows must sit behind the tiles, and the focused window on top. Window order follows raising, one
-    /// window at a time (raising a whole app would pull its peeking windows over the tiles): hidden background windows
-    /// first, then peeks least useful first, then the tiles, then the front window. Each step raises the window and makes its app frontmost.
-    private func restack(_ plan: LayoutPlan, entriesByID: [Int: WindowEnumerator.Entry], frontID: Int?) {
-        let peeks = plan.placements.filter { $0.group == "peek" }
-        let hidden = plan.placements.filter { $0.group == "behind" }
-        guard !peeks.isEmpty || !hidden.isEmpty || frontID != nil else { return }
-        let tiles = plan.placements.filter { $0.group.hasPrefix("column") && $0.id != frontID }
-        var sequence = (hidden + peeks.reversed()).compactMap { entriesByID[$0.id] } + tiles.compactMap { entriesByID[$0.id] }
-        if let frontID, let front = entriesByID[frontID] { sequence.append(front) }
-        guard !sequence.isEmpty else { return }
+    /// Tiles in front and the focused window on top, one app at a time rather than one window at a time: bringing an
+    /// app forward brings all its windows above the apps not brought forward, so each app with a tile is brought
+    /// forward once (its windows raised within it first: a hidden one under its tile, then peeks, then tiles), and the
+    /// focused window's app last. Apps whose windows are all hidden are never brought forward and stay behind.
+    private func restack(_ placements: [Placement], entriesByID: [Int: WindowEnumerator.Entry], frontID: Int?) {
+        let rank = { (group: String) in group == "behind" ? 0 : group == "peek" ? 1 : 2 }
+        let ordered = placements.filter { $0.group == "behind" || $0.group == "peek" || $0.group.hasPrefix("column") }
+            .enumerated().sorted { (rank($0.element.group), $0.offset) < (rank($1.element.group), $1.offset) }.map(\.element)
+        // The focused window counts only when it has a place in front; a hidden one must not be brought over the tiles.
+        let front = ordered.first { $0.id == frontID && $0.group != "behind" }.flatMap { entriesByID[$0.id] }
+        var apps: [pid_t] = []
+        for placement in ordered where placement.group != "behind" {
+            if let pid = entriesByID[placement.id]?.pid, !apps.contains(pid) { apps.append(pid) }
+        }
+        if let front { apps.removeAll { $0 == front.pid }; apps.append(front.pid) }
+        guard !apps.isEmpty else { return }
 
         restackTask?.cancel()
         restackTask = Task { @MainActor in
-            for entry in sequence {
+            let started = Date()
+            defer { Self.log("stacked \(apps.count) app(s) in \(Int(Date().timeIntervalSince(started) * 1000)) ms") }
+            for (index, pid) in apps.enumerated() {
                 guard !Task.isCancelled else { return }
-                entry.window.bringToFront(pid: entry.pid)
-                try? await Task.sleep(for: .milliseconds(30))
+                let windows = ordered.compactMap { entriesByID[$0.id] }.filter { $0.pid == pid && $0.info.id != front?.info.id }
+                windows.forEach { $0.window.raise() }
+                if let front, front.pid == pid {
+                    // The other apps come forward in any order (their tiles do not overlap); let them land first.
+                    if index > 0 { try? await Task.sleep(for: .milliseconds(40)) }
+                    front.window.bringToFront(pid: pid)
+                } else if let top = windows.last {
+                    top.window.bringToFront(pid: pid)
+                }
             }
         }
     }
@@ -549,7 +574,8 @@ public final class SmartArranger {
 
     private func watchForCorrections(after plan: LayoutPlan, snapshot: WindowEnumerator.Snapshot) {
         correctionTask?.cancel()
-        let planned = plan.placements.compactMap { placement -> (key: String, info: WindowInfo, rect: CGRect)? in
+        // Hidden windows are left where they were (see placementsToApply), so their planned frames say nothing.
+        let planned = plan.placements.filter { $0.group != "behind" }.compactMap { placement -> (key: String, info: WindowInfo, rect: CGRect)? in
             guard let info = snapshot.windows.first(where: { $0.id == placement.id }) else { return nil }
             return (info.key, info, placement.rect)
         }
