@@ -1,10 +1,10 @@
 # 交接：ModernSpectacle 当前任务
 
-最后更新：2026-11-04。商店上的最新版本是 **0.3.8**。master 上比 0.3.8 多一个**尚未在屏幕上测试**的改动（见任务 1）。
+最后更新：2026-11-17。商店上的最新版本是 **0.3.9**，包含任务 1 的改动。这个改动按用户要求直接发布，**仍未在屏幕上测试**。
 
-## 任务 1（进行中）：排列不再一个个画窗口，背景窗口不动
+## 任务 1（已发布 0.3.9，待屏幕验证）：排列不再一个个画窗口，背景窗口不动
 
-### 改了什么（已提交，未发布）
+### 改了什么（已在 0.3.9 发布）
 
 文件：`Sources/ModernSpectacleServices/SmartArranger.swift`、`Sources/ModernSpectacleServices/AccessibilityClient.swift`
 
@@ -14,7 +14,7 @@
 4. **学习不被污染**：`watchForCorrections` 跳过 `"behind"` 窗口。它们不再在计划的位置上，否则会被当成用户手动挪了窗口。
 5. 新日志：`stacked N app(s) in X ms`，在 `~/Library/Application Support/ModernSpectacle/status.log`。
 
-单元测试 63 个全过。**没有在真实屏幕上测过**（当时屏幕锁着，用户决定先推送）。
+单元测试 63 个全过，发布流程完整跑通（公证、Gatekeeper、Sparkle 签名）。**没有在真实屏幕上测过**：用户决定直接发布。如果用户报告窗口被盖住、或排列后窗口叠放不对，先按下面的步骤测。
 
 ### 要做的测试
 
@@ -36,17 +36,17 @@
    - 肉眼看：松开按键后窗口一次到位，不再一个个出现。
 5. 失败时：看 `status.log` 和 `last-arrangement.json`，修好再测。注意：在 macOS 上，把 App 设为 frontmost 会带上它所有窗口，这是 Chrome bug 的根源。
 
-### 测试通过后发布 0.3.9
+### 下一次发布（0.3.10 及以后）
 
 ```bash
 cd ModernSpectacle
-sed -i '' 's/^VERSION="0.3.8"/VERSION="0.3.9"/' build-app.sh
+# 把 build-app.sh 里的 VERSION 改成新版本号
 ./release.sh                         # 构建、Developer ID 签名、公证、staple，打印 dmg 路径
 SPARKLE_SIGN_UPDATE=$PWD/.build/artifacts/sparkle/Sparkle/bin/sign_update \
-  node ~/.config/webstore/publish.mjs modern-spectacle 0.3.9 dist/ModernSpectacle-0.3.9-universal.dmg \
+  node ~/.config/webstore/publish.mjs modern-spectacle <版本> dist/ModernSpectacle-<版本>-universal.dmg \
   --sparkle --notes-file <中英双语发布说明>
 ```
-然后检查 appcast 里 0.3.9 有 `sparkle:edSignature`，再提交并推送版本号改动。
+然后检查 appcast 里新版本有 `sparkle:edSignature`，再提交并推送版本号改动。
 
 ## 换到另一台 Mac 需要先准备
 
