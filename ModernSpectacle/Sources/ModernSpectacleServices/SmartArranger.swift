@@ -435,9 +435,11 @@ public final class SmartArranger {
             guard let entry = entriesByID[placement.id] else { return nil }
             return (MoveJob(window: entry.window, pid: entry.pid, target: placement.rect, app: entry.info.app, bundleID: entry.info.bundleID), placement.group == "behind")
         }
+        // Visible windows slide to their places; hidden ones (under a tile of their app) just go there.
+        let slide = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Self.slideDuration
         Task { @MainActor [weak self] in
             let started = Date()
-            let visible = await Self.moveInParallel(jobs.filter { !$0.hidden }.map(\.job))
+            let visible = await Self.moveInParallel(jobs.filter { !$0.hidden }.map(\.job), slide: slide)
             let visibleMs = Int(Date().timeIntervalSince(started) * 1000)
             whenVisible?()
             let hidden = await Self.moveInParallel(jobs.filter(\.hidden).map(\.job))
@@ -464,16 +466,19 @@ public final class SmartArranger {
         }
     }
 
-    /// Each app's jobs run in order on their own task; the apps run side by side.
-    private nonisolated static func moveInParallel(_ jobs: [MoveJob]) async -> [Moved] {
+    /// How long visible windows take to slide into place.
+    private static let slideDuration: TimeInterval = 0.25
+
+    /// Each app's windows move on their own task; the apps run side by side.
+    private nonisolated static func moveInParallel(_ jobs: [MoveJob], slide: TimeInterval = 0) async -> [Moved] {
         let byApp = Dictionary(grouping: jobs, by: \.pid)
         return await withTaskGroup(of: [Moved].self) { group in
             for appJobs in byApp.values {
                 group.addTask {
                     let started = Date()
-                    let moved = appJobs.compactMap(move)
+                    let moved = await move(appJobs, slide: slide)
                     let ms = Int(Date().timeIntervalSince(started) * 1000)
-                    if ms >= 150, let app = appJobs.first?.app {
+                    if ms >= Int(slide * 1000) + 150, let app = appJobs.first?.app {
                         let message = "slow: \(app) took \(ms) ms to move \(appJobs.count) window(s)"
                         await MainActor.run { log(message) }
                     }
@@ -486,12 +491,48 @@ public final class SmartArranger {
         }
     }
 
-    private nonisolated static func move(_ job: MoveJob) -> Moved? {
-        guard let before = job.window.frame, before.integral != job.target.integral else { return nil }
-        // No correction right after: an app that resizes asynchronously still reports its old size here, and moving
-        // it "back inside" would fight its own resize. The settle passes check later.
-        job.window.setFrame(job.target, from: before)
-        return Moved(job: job, before: before)
+    /// Slides one app's windows to their targets together, easing out. Only the position changes along the way:
+    /// resizing makes an app lay itself out again (a terminal reflows its text), too slow to repeat every step, while
+    /// moving is cheap for every app. So a window shrinks before it slides and grows once it lands. Each step puts the
+    /// windows where they should be by now, so a slow app takes fewer, larger steps instead of falling behind.
+    /// With no slide the windows go straight there.
+    /// No correction right after: an app that resizes asynchronously still reports its old size here, and moving
+    /// it "back inside" would fight its own resize. The settle passes check later.
+    private nonisolated static func move(_ jobs: [MoveJob], slide: TimeInterval) async -> [Moved] {
+        let moves = jobs.compactMap { job -> Moved? in
+            guard let before = job.window.frame, before.integral != job.target.integral else { return nil }
+            return Moved(job: job, before: before)
+        }
+        guard !moves.isEmpty else { return [] }
+        var current = moves.map(\.before)
+        let sliding = slide > 0 ? moves.indices.filter { hypot(moves[$0].before.minX - moves[$0].job.target.minX, moves[$0].before.minY - moves[$0].job.target.minY) > 2 } : []
+        if !sliding.isEmpty {
+            for index in sliding {
+                let before = moves[index].before, target = moves[index].job.target
+                let small = CGSize(width: min(before.width, target.width), height: min(before.height, target.height))
+                if abs(small.width - before.width) > 0.5 || abs(small.height - before.height) > 0.5 {
+                    moves[index].job.window.setSize(small)
+                    current[index].size = small
+                }
+            }
+            let started = Date()
+            while true {
+                let elapsed = Date().timeIntervalSince(started) / slide
+                if elapsed >= 1 { break }
+                let progress = 1 - pow(1 - elapsed, 3)
+                for index in sliding {
+                    let from = moves[index].before.origin, to = moves[index].job.target.origin
+                    let origin = CGPoint(x: (from.x + (to.x - from.x) * progress).rounded(), y: (from.y + (to.y - from.y) * progress).rounded())
+                    moves[index].job.window.setPosition(origin)
+                    current[index].origin = origin
+                }
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+        }
+        for (index, moved) in moves.enumerated() {
+            moved.job.window.setFrame(moved.job.target, from: current[index])
+        }
+        return moves
     }
 
     /// Some apps resize asynchronously (Sublime Text) and drop a size change that arrives while the previous one is
